@@ -1,0 +1,169 @@
+/* Phase 4 — App shell: sidebar, main, mobile drawer, collapsible nav */
+
+/* Mobile top bar */
+.mobile-topbar {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    z-index: 150;
+}
+
+.mobile-topbar .brand {
+    margin-bottom: 0;
+}
+
+.mobile-menu-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.sidebar-collapse-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    margin-bottom: 12px;
+    margin-left: auto;
+    margin-right: 8px;
+}
+
+.sidebar-collapse-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+/* Sidebar overlay (mobile) */
+.sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 190;
+    backdrop-filter: blur(2px);
+}
+
+.sidebar-backdrop.active {
+    display: block;
+}
+
+/* Collapsed desktop sidebar */
+body.sidebar-collapsed aside {
+    width: var(--sidebar-collapsed-width);
+    padding: 16px 10px;
+}
+
+body.sidebar-collapsed aside .brand {
+    justify-content: center;
+    padding: 0;
+}
+
+body.sidebar-collapsed main {
+    margin-left: var(--sidebar-collapsed-width);
+    width: calc(100% - var(--sidebar-collapsed-width));
+}
+
+body.sidebar-collapsed aside .brand-text,
+body.sidebar-collapsed aside .user-info {
+    display: none;
+}
+
+body.sidebar-collapsed aside .nav-item {
+    justify-content: center;
+    font-size: 0;
+    color: transparent;
+    gap: 0;
+}
+
+body.sidebar-collapsed aside .nav-item svg {
+    color: var(--text-secondary);
+}
+
+body.sidebar-collapsed aside .nav-item.active svg {
+    color: #fff;
+}
+
+body.sidebar-collapsed aside .sidebar-collapse-btn {
+    display: flex;
+    margin: 0 auto 12px;
+}
+
+body.sidebar-collapsed aside .sidebar-collapse-btn svg {
+    color: var(--text-secondary);
+}
+
+#kanban-view.content-section.active {
+    min-height: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.kanban-toolbar {
+    flex-shrink: 0;
+}
+
+/* Collapsible filter bar */
+.filter-bar-collapsible .filter-bar-body {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    width: 100%;
+}
+
+.filter-bar-toggle {
+    display: none;
+    width: 100%;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.filter-bar-collapsible.collapsed .filter-bar-body {
+    display: none;
+}
+
+/* Sticky filter on kanban (desktop) */
+@media (min-width: 1024px) {
+    .kanban-toolbar .filter-bar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+    }
+}
+
+/* Header actions row */
+.header-actions {
+    flex-wrap: wrap;
+}
+
+.header-actions .primary-btn {
+    white-space: nowrap;
+}

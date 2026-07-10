@@ -1,0 +1,399 @@
+/* Phase 1 — Responsive Kanban board */
+
+.board-scroll-wrapper {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.board-scroll-wrapper::before,
+.board-scroll-wrapper::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 12px;
+    width: 24px;
+    pointer-events: none;
+    z-index: 5;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.board-scroll-wrapper.can-scroll-left::before {
+    opacity: 1;
+    left: 0;
+    background: linear-gradient(to right, var(--bg-primary), transparent);
+}
+
+.board-scroll-wrapper.can-scroll-right::after {
+    opacity: 1;
+    right: 0;
+    background: linear-gradient(to left, var(--bg-primary), transparent);
+}
+
+/* Horizontal scroll board (desktop + tablet) */
+.board-container {
+    display: flex;
+    flex-direction: row;
+    gap: 16px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 4px 16px;
+    scroll-snap-type: x proximity;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+    flex: 1;
+    min-height: 320px;
+    align-items: stretch;
+}
+
+.board-container::-webkit-scrollbar {
+    height: 8px;
+}
+
+.board-container::-webkit-scrollbar-track {
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+}
+
+.board-container::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 4px;
+}
+
+.board-container::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+.board-column {
+    flex: 0 0 var(--kanban-column-width);
+    width: var(--kanban-column-width);
+    min-width: var(--kanban-column-width);
+    max-width: 320px;
+    scroll-snap-align: start;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 12px 10px;
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - var(--header-offset, 220px));
+    min-height: 280px;
+    box-shadow: var(--card-shadow);
+}
+
+.column-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding: 0 4px;
+    flex-shrink: 0;
+}
+
+.column-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.column-title h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.column-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.dot-backlog { background-color: var(--text-muted); }
+.dot-todo { background-color: var(--info); }
+.dot-progress { background-color: var(--accent-color); }
+.dot-review { background-color: var(--warning); }
+.dot-testing { background-color: #a855f7; }
+.dot-done { background-color: var(--success); }
+
+.column-count {
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 12px;
+    flex-shrink: 0;
+}
+
+.cards-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    flex: 1;
+    min-height: 100px;
+    min-width: 0;
+    padding: 2px;
+}
+
+/* Task cards */
+.task-card {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 14px;
+    cursor: grab;
+    position: relative;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.task-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--card-shadow);
+    border-color: var(--text-muted);
+}
+
+.task-card:active {
+    cursor: grabbing;
+}
+
+.task-card.dragging {
+    opacity: 0.4;
+    border: 2px dashed var(--accent-color);
+}
+
+.card-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.card-title {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.card-desc-preview {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+}
+
+.card-custom-labels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 10px;
+}
+
+.custom-label-pill {
+    width: 16px;
+    height: 6px;
+    border-radius: 4px;
+}
+
+.card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 8px;
+    border-top: 1px solid var(--border-color);
+    padding-top: 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 0;
+}
+
+.card-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+}
+
+.card-meta .meta-item,
+.card-meta span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+.meta-item.overdue { color: var(--error); }
+.meta-item.due-today { color: var(--warning); }
+
+.card-assignee {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: linear-gradient(135deg, var(--accent-color), var(--info));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    color: white;
+    font-size: 10px;
+}
+
+.card-assignee.unassigned {
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    border: 1px dashed var(--border-color);
+}
+
+/* Compact card in narrow contexts */
+.task-card.compact .card-desc-preview {
+    display: none;
+}
+
+.task-card .card-move-btn {
+    display: none;
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Mobile status tabs — one column at a time */
+.kanban-status-tabs {
+    display: none;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 0 0 12px;
+    flex-shrink: 0;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+}
+
+.kanban-status-tabs::-webkit-scrollbar {
+    display: none;
+}
+
+.kanban-status-tab {
+    flex-shrink: 0;
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.kanban-status-tab.active {
+    background: var(--accent-color);
+    border-color: var(--accent-color);
+    color: #fff;
+}
+
+.kanban-status-tab .tab-count {
+    font-size: 10px;
+    opacity: 0.85;
+    background: rgba(0,0,0,0.15);
+    padding: 1px 6px;
+    border-radius: 8px;
+}
+
+/* Move task menu (touch) */
+.move-task-menu {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    background: rgba(0,0,0,0.5);
+    display: none;
+    align-items: flex-end;
+    justify-content: center;
+    padding: 16px;
+}
+
+.move-task-menu.active {
+    display: flex;
+}
+
+.move-task-sheet {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 16px 16px 0 0;
+    width: 100%;
+    max-width: 480px;
+    max-height: 70vh;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+.move-task-sheet h4 {
+    margin-bottom: 12px;
+    font-size: 15px;
+}
+
+.move-task-option {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 12px 14px;
+    margin-bottom: 6px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.move-task-option:hover {
+    border-color: var(--accent-color);
+}
+
+.move-task-cancel {
+    width: 100%;
+    margin-top: 8px;
+    padding: 12px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+}

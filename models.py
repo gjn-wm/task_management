@@ -19,6 +19,7 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     role = Column(String, default="Developer")
     full_name = Column(String, nullable=True)
+    skills = Column(String, default="")
 
     # Relationships
     tasks = relationship("Task", back_populates="assignee")
@@ -26,6 +27,7 @@ class User(Base):
     comments = relationship("Comment", back_populates="user", cascade="all, delete-orphan")
     attachments = relationship("Attachment", back_populates="user", cascade="all, delete-orphan")
     activity_logs = relationship("ActivityLog", back_populates="user", cascade="all, delete-orphan")
+    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
 
 class Project(Base):
     __tablename__ = "projects"
@@ -40,6 +42,37 @@ class Project(Base):
 
     lead = relationship("User", back_populates="led_projects")
     tasks = relationship("Task", back_populates="project")
+    sprints = relationship("Sprint", back_populates="project")
+
+class Sprint(Base):
+    __tablename__ = "sprints"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    start_date = Column(String, nullable=False)
+    end_date = Column(String, nullable=False)
+    goal = Column(String, default="")
+    status = Column(String, default="Planned")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("Project", back_populates="sprints")
+    tasks = relationship("Task", back_populates="sprint")
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True)
+    type = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    message = Column(String, nullable=False)
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="notifications")
+    task = relationship("Task", back_populates="notifications")
 
 class Label(Base):
     __tablename__ = "labels"
@@ -65,17 +98,21 @@ class Task(Base):
     actual_hours = Column(Float, default=0.0)
     assignee_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     project_id = Column(Integer, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    sprint_id = Column(Integer, ForeignKey("sprints.id", ondelete="SET NULL"), nullable=True)
+    completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
     assignee = relationship("User", back_populates="tasks")
     project = relationship("Project", back_populates="tasks")
+    sprint = relationship("Sprint", back_populates="tasks")
     labels = relationship("Label", secondary=task_labels, back_populates="tasks")
     subtasks = relationship("Subtask", back_populates="task", cascade="all, delete-orphan", order_by="Subtask.sort_order")
     comments = relationship("Comment", back_populates="task", cascade="all, delete-orphan")
     attachments = relationship("Attachment", back_populates="task", cascade="all, delete-orphan")
     activity_logs = relationship("ActivityLog", back_populates="task", cascade="all, delete-orphan")
+    notifications = relationship("Notification", back_populates="task", cascade="all, delete-orphan")
 
 class Subtask(Base):
     __tablename__ = "subtasks"

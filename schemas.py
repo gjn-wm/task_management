@@ -20,6 +20,7 @@ class UserBase(BaseModel):
     username: str
     full_name: Optional[str] = None
     role: str = "Developer"
+    skills: str = ""
 
 class UserCreate(UserBase):
     password: str
@@ -28,6 +29,7 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     role: Optional[str] = None
     password: Optional[str] = None
+    skills: Optional[str] = None
 
 class PasswordReset(BaseModel):
     old_password: str
@@ -36,8 +38,20 @@ class PasswordReset(BaseModel):
 
 class UserResponse(UserBase):
     id: int
+    skill_list: List[str] = []
     class Config:
         from_attributes = True
+
+    @classmethod
+    def from_user(cls, user):
+        data = cls.model_validate(user)
+        data.skill_list = parse_skills(user.skills)
+        return data
+
+def parse_skills(skills_str: Optional[str]) -> List[str]:
+    if not skills_str:
+        return []
+    return [s.strip() for s in skills_str.split(",") if s.strip()]
 
 # --- Project Schemas ---
 class ProjectBase(BaseModel):
@@ -91,6 +105,47 @@ class BulkTaskAction(BaseModel):
     status: Optional[str] = None
     priority: Optional[str] = None
     project_id: Optional[int] = None
+    sprint_id: Optional[int] = None
+
+# --- Sprint Schemas ---
+class SprintBase(BaseModel):
+    name: str
+    project_id: Optional[int] = None
+    start_date: str
+    end_date: str
+    goal: Optional[str] = ""
+    status: str = "Planned"
+
+class SprintCreate(SprintBase):
+    pass
+
+class SprintUpdate(BaseModel):
+    name: Optional[str] = None
+    project_id: Optional[int] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    goal: Optional[str] = None
+    status: Optional[str] = None
+
+class SprintResponse(SprintBase):
+    id: int
+    task_count: int = 0
+    completed_count: int = 0
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+# --- Notification Schemas ---
+class NotificationResponse(BaseModel):
+    id: int
+    task_id: Optional[int] = None
+    type: str
+    title: str
+    message: str
+    is_read: bool
+    created_at: datetime
+    class Config:
+        from_attributes = True
 
 # --- Comment Schemas ---
 class CommentCreate(BaseModel):
@@ -131,6 +186,7 @@ class TaskBase(BaseModel):
 class TaskCreate(TaskBase):
     assignee_id: Optional[int] = None
     project_id: Optional[int] = None
+    sprint_id: Optional[int] = None
     label_ids: Optional[List[int]] = []
 
 class TaskUpdate(BaseModel):
@@ -144,12 +200,15 @@ class TaskUpdate(BaseModel):
     actual_hours: Optional[float] = None
     assignee_id: Optional[int] = None
     project_id: Optional[int] = None
+    sprint_id: Optional[int] = None
     label_ids: Optional[List[int]] = None
 
 class TaskResponse(TaskBase):
     id: int
     assignee_id: Optional[int] = None
     project_id: Optional[int] = None
+    sprint_id: Optional[int] = None
+    completed_at: Optional[datetime] = None
     assignee: Optional[UserResponse] = None
     project: Optional[ProjectResponse] = None
     labels: List[LabelResponse] = []

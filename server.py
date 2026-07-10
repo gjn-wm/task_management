@@ -103,6 +103,92 @@ def filter_tasks_for_user(query, user: models.User):
         )
     return query
 
+def apply_task_status(task: models.Task, new_status: str):
+    task.status = new_status
+    if new_status == "Done":
+        if not task.completed_at:
+            task.completed_at = datetime.utcnow()
+    else:
+        task.completed_at = None
+
+def serialize_user(user: models.User) -> schemas.UserResponse:
+    data = schemas.UserResponse.model_validate(user)
+    data.skill_list = schemas.parse_skills(user.skills)
+    return data
+
+def sprint_stats(db: Session, sprint_id: int):
+    tasks = db.query(models.Task).filter(models.Task.sprint_id == sprint_id).all()
+    return len(tasks), len([t for t in tasks if t.status == "Done"])
+
+def serialize_sprint(sprint: models.Sprint, db: Session) -> schemas.SprintResponse:
+    total, completed = sprint_stats(db, sprint.id)
+    data = schemas.SprintResponse.model_validate(sprint)
+    data.task_count = total
+    data.completed_count = completed
+    return data
+
+DUE_NOTIFICATION_TYPES = ("overdue", "due_today", "due_soon")
+
+
+def sync_due_notifications(db: Session, user: models.User):
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    if user.role == auth.ROLE_DEVELOPER:
+        task_query = db.query(models.Task).filter(
+            models.Task.assignee_id == user.id,
+            models.Task.status != "Done",
+            models.Task.due_date.isnot(None)
+        )
+    elif user.role in [auth.ROLE_ADMIN, auth.ROLE_MANAGER]:
+        task_query = db.query(models.Task).filter(
+            models.Task.status != "Done",
+            models.Task.due_date.isnot(None)
+        )
+    else:
+        return
+
+    for task in task_query.all():
+        recipient_id = task.assignee_id or user.id
+        if user.role == auth.ROLE_DEVELOPER and recipient_id != user.id:
+            continue
+
+        if task.due_date < today_str:
+            ntype, title = "overdue", f"Overdue: {task.title}"
+        elif task.due_date == today_str:
+            ntype, title = "due_today", f"Due today: {task.title}"
+        elif task.due_date == tomorrow_str:
+            ntype, title = "due_soon", f"Due tomorrow: {task.title}"
+        else:
+            continue
+
+        message = f'Task "{task.title}" needs attention ({ntype.replace("_", " ")})'
+
+        # One alert per user+task — do not recreate after mark-as-read
+        existing = db.query(models.Notification).filter(
+            models.Notification.user_id == recipient_id,
+            models.Notification.task_id == task.id,
+            models.Notification.type.in_(DUE_NOTIFICATION_TYPES),
+        ).first()
+
+        if existing:
+            old_type = existing.type
+            if existing.type != ntype or existing.title != title or existing.message != message:
+                existing.type = ntype
+                existing.title = title
+                existing.message = message
+                if ntype == "overdue" and old_type != "overdue":
+                    existing.is_read = False
+        else:
+            db.add(models.Notification(
+                user_id=recipient_id,
+                task_id=task.id,
+                type=ntype,
+                title=title,
+                message=message
+            ))
+    db.commit()
+
 # --- Auth Routes ---
 @app.post("/api/auth/login")
 def login(response: Response, form_data: schemas.UserCreate, db: Session = Depends(get_db)):
@@ -134,7 +220,7 @@ def logout(response: Response):
 
 @app.get("/api/auth/me", response_model=schemas.UserResponse)
 def get_me(current_user: models.User = Depends(auth.get_current_user)):
-    return current_user
+    return serialize_user(current_user)
 
 @app.post("/api/auth/reset-password")
 def reset_password(
@@ -157,10 +243,18 @@ def reset_password(
 # --- User Management Routes ---
 @app.get("/api/users", response_model=List[schemas.UserResponse])
 def list_users(
+    skill: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    return db.query(models.User).all()
+    users = db.query(models.User).all()
+    result = []
+    for user in users:
+        data = serialize_user(user)
+        if skill and skill.lower() not in [s.lower() for s in data.skill_list]:
+            continue
+        result.append(data)
+    return result
 
 
 @app.post("/api/users", response_model=schemas.UserResponse)
@@ -179,14 +273,15 @@ def create_user(
         username=user_in.username,
         password_hash=hashed_pw,
         role=user_in.role,
-        full_name=user_in.full_name
+        full_name=user_in.full_name,
+        skills=user_in.skills or ""
     )
     db.add(user)
     db.commit()
     db.refresh(user)
     
     log_activity(db, admin_user.id, "Create User", f"Created user {user.username} with role {user.role}")
-    return user
+    return serialize_user(user)
 
 @app.put("/api/users/{user_id}", response_model=schemas.UserResponse)
 def update_user(
@@ -203,6 +298,8 @@ def update_user(
         user.full_name = user_in.full_name
     if user_in.role is not None:
         user.role = user_in.role
+    if user_in.skills is not None:
+        user.skills = user_in.skills
     if user_in.password:
         user.password_hash = auth.hash_password(user_in.password)
         
@@ -210,7 +307,7 @@ def update_user(
     db.refresh(user)
     
     log_activity(db, admin_user.id, "Update User", f"Updated user {user.username}")
-    return user
+    return serialize_user(user)
 
 @app.delete("/api/users/{user_id}")
 def delete_user(
@@ -239,6 +336,7 @@ def get_tasks(
     category: Optional[str] = None,
     assignee_id: Optional[int] = None,
     project_id: Optional[int] = None,
+    sprint_id: Optional[int] = None,
     search: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
@@ -254,6 +352,8 @@ def get_tasks(
         query = query.filter(models.Task.category == category)
     if project_id is not None:
         query = query.filter(models.Task.project_id == project_id)
+    if sprint_id is not None:
+        query = query.filter(models.Task.sprint_id == sprint_id)
     if assignee_id is not None:
         if current_user.role == auth.ROLE_DEVELOPER and assignee_id != current_user.id:
             raise HTTPException(status_code=403, detail="Developers can only view their own or unassigned tasks.")
@@ -294,8 +394,11 @@ def create_task(
         estimated_hours=task_in.estimated_hours,
         actual_hours=task_in.actual_hours,
         assignee_id=task_in.assignee_id,
-        project_id=task_in.project_id
+        project_id=task_in.project_id,
+        sprint_id=task_in.sprint_id
     )
+    if task_in.status == "Done":
+        task.completed_at = datetime.utcnow()
     
     # Manage labels
     if task_in.label_ids:
@@ -324,14 +427,16 @@ def update_task(
     if current_user.role == auth.ROLE_DEVELOPER and task_in.assignee_id is not None and task_in.assignee_id != current_user.id:
         raise HTTPException(status_code=403, detail="Developers cannot reassign tasks to other team members.")
         
-    fields_to_update = ["title", "description", "priority", "status", "category", "due_date", "estimated_hours", "actual_hours", "assignee_id", "project_id"]
+    fields_to_update = ["title", "description", "priority", "status", "category", "due_date", "estimated_hours", "actual_hours", "assignee_id", "project_id", "sprint_id"]
     for field in fields_to_update:
         val = getattr(task_in, field)
         if val is not None:
-            # Check if status has changed to log it
-            if field == "status" and getattr(task, "status") != val:
-                log_activity(db, current_user.id, "Status Change", f"Moved task to '{val}'", task.id)
-            setattr(task, field, val)
+            if field == "status":
+                if task.status != val:
+                    log_activity(db, current_user.id, "Status Change", f"Moved task to '{val}'", task.id)
+                apply_task_status(task, val)
+            else:
+                setattr(task, field, val)
             
     if task_in.label_ids is not None:
         labels = db.query(models.Label).filter(models.Label.id.in_(task_in.label_ids)).all()
@@ -361,7 +466,7 @@ def update_task_status(
         raise HTTPException(status_code=400, detail="Status is required")
         
     old_status = task.status
-    task.status = new_status
+    apply_task_status(task, new_status)
     db.commit()
     db.refresh(task)
     
@@ -414,13 +519,16 @@ def bulk_task_action(
             task.assignee_id = bulk_in.assignee_id
             updated += 1
         elif action == "status" and bulk_in.status:
-            task.status = bulk_in.status
+            apply_task_status(task, bulk_in.status)
             updated += 1
         elif action == "priority" and bulk_in.priority:
             task.priority = bulk_in.priority
             updated += 1
         elif action == "project":
             task.project_id = bulk_in.project_id
+            updated += 1
+        elif action == "sprint":
+            task.sprint_id = bulk_in.sprint_id
             updated += 1
         else:
             raise HTTPException(status_code=400, detail=f"Invalid bulk action: {action}")
@@ -580,6 +688,195 @@ def delete_subtask(
     db.commit()
     log_activity(db, current_user.id, "Delete Subtask", "Removed subtask", task_id)
     return {"status": "success", "message": "Subtask deleted"}
+
+# --- Sprint Routes ---
+@app.get("/api/sprints", response_model=List[schemas.SprintResponse])
+def list_sprints(
+    project_id: Optional[int] = None,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    query = db.query(models.Sprint)
+    if project_id is not None:
+        query = query.filter(models.Sprint.project_id == project_id)
+    if status:
+        query = query.filter(models.Sprint.status == status)
+    sprints = query.order_by(models.Sprint.start_date.desc()).all()
+    return [serialize_sprint(s, db) for s in sprints]
+
+@app.get("/api/sprints/{sprint_id}", response_model=schemas.SprintResponse)
+def get_sprint(
+    sprint_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    sprint = db.query(models.Sprint).filter(models.Sprint.id == sprint_id).first()
+    if not sprint:
+        raise HTTPException(status_code=404, detail="Sprint not found")
+    return serialize_sprint(sprint, db)
+
+@app.post("/api/sprints", response_model=schemas.SprintResponse)
+def create_sprint(
+    sprint_in: schemas.SprintCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.check_permission(auth.ROLES_PROJECT_MANAGE))
+):
+    sprint = models.Sprint(
+        name=sprint_in.name,
+        project_id=sprint_in.project_id,
+        start_date=sprint_in.start_date,
+        end_date=sprint_in.end_date,
+        goal=sprint_in.goal,
+        status=sprint_in.status
+    )
+    db.add(sprint)
+    db.commit()
+    db.refresh(sprint)
+    log_activity(db, current_user.id, "Create Sprint", f"Created sprint: {sprint.name}")
+    return serialize_sprint(sprint, db)
+
+@app.put("/api/sprints/{sprint_id}", response_model=schemas.SprintResponse)
+def update_sprint(
+    sprint_id: int,
+    sprint_in: schemas.SprintUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.check_permission(auth.ROLES_PROJECT_MANAGE))
+):
+    sprint = db.query(models.Sprint).filter(models.Sprint.id == sprint_id).first()
+    if not sprint:
+        raise HTTPException(status_code=404, detail="Sprint not found")
+
+    for field in ["name", "project_id", "start_date", "end_date", "goal", "status"]:
+        val = getattr(sprint_in, field)
+        if val is not None:
+            setattr(sprint, field, val)
+
+    db.commit()
+    db.refresh(sprint)
+    log_activity(db, current_user.id, "Update Sprint", f"Updated sprint: {sprint.name}")
+    return serialize_sprint(sprint, db)
+
+@app.delete("/api/sprints/{sprint_id}")
+def delete_sprint(
+    sprint_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN]))
+):
+    sprint = db.query(models.Sprint).filter(models.Sprint.id == sprint_id).first()
+    if not sprint:
+        raise HTTPException(status_code=404, detail="Sprint not found")
+
+    name = sprint.name
+    db.query(models.Task).filter(models.Task.sprint_id == sprint_id).update({"sprint_id": None})
+    db.delete(sprint)
+    db.commit()
+    log_activity(db, current_user.id, "Delete Sprint", f"Deleted sprint: {name}")
+    return {"status": "success", "message": f"Sprint '{name}' deleted"}
+
+@app.get("/api/sprints/{sprint_id}/burndown")
+def get_sprint_burndown(
+    sprint_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    sprint = db.query(models.Sprint).filter(models.Sprint.id == sprint_id).first()
+    if not sprint:
+        raise HTTPException(status_code=404, detail="Sprint not found")
+
+    tasks = db.query(models.Task).filter(models.Task.sprint_id == sprint_id).all()
+    total_scope = len(tasks)
+    completed = len([t for t in tasks if t.status == "Done"])
+
+    from datetime import date as date_cls
+    start = date_cls.fromisoformat(sprint.start_date)
+    end = date_cls.fromisoformat(sprint.end_date)
+    today = date_cls.today()
+    last_day = min(end, today)
+
+    dates = []
+    actual_remaining = []
+    ideal_remaining = []
+    day_span = max((end - start).days, 1)
+
+    current = start
+    day_index = 0
+    while current <= last_day:
+        dates.append(current.isoformat())
+        remaining = 0
+        for task in tasks:
+            if task.status != "Done":
+                remaining += 1
+            elif task.completed_at and task.completed_at.date() > current:
+                remaining += 1
+        actual_remaining.append(remaining)
+        ideal_remaining.append(round(total_scope * (1 - day_index / day_span), 1))
+        day_index += 1
+        current += timedelta(days=1)
+
+    sprint_days = max((end - start).days + 1, 1)
+    velocity = round(completed / sprint_days * 7, 1)
+
+    return {
+        "sprint_id": sprint.id,
+        "sprint_name": sprint.name,
+        "total_scope": total_scope,
+        "completed": completed,
+        "velocity_per_week": velocity,
+        "dates": dates,
+        "actual_remaining": actual_remaining,
+        "ideal_remaining": ideal_remaining
+    }
+
+# --- Notification Routes ---
+@app.get("/api/notifications", response_model=List[schemas.NotificationResponse])
+def list_notifications(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    sync_due_notifications(db, current_user)
+    return db.query(models.Notification).filter(
+        models.Notification.user_id == current_user.id
+    ).order_by(models.Notification.created_at.desc()).limit(50).all()
+
+@app.get("/api/notifications/unread-count")
+def unread_notification_count(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    count = db.query(models.Notification).filter(
+        models.Notification.user_id == current_user.id,
+        models.Notification.is_read == False
+    ).count()
+    return {"count": count}
+
+@app.patch("/api/notifications/{notification_id}/read")
+def mark_notification_read(
+    notification_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    note = db.query(models.Notification).filter(
+        models.Notification.id == notification_id,
+        models.Notification.user_id == current_user.id
+    ).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    note.is_read = True
+    db.commit()
+    return {"status": "success"}
+
+@app.post("/api/notifications/mark-all-read")
+def mark_all_notifications_read(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    db.query(models.Notification).filter(
+        models.Notification.user_id == current_user.id,
+        models.Notification.is_read == False
+    ).update({"is_read": True})
+    db.commit()
+    return {"status": "success"}
 
 # --- Comments Routes ---
 @app.post("/api/tasks/{task_id}/comments", response_model=schemas.CommentResponse)
@@ -823,12 +1120,51 @@ def get_analytics(
     est_total = sum(t.estimated_hours for t in tasks)
     act_total = sum(t.actual_hours for t in tasks)
     
+    from datetime import date as date_cls
+
     # Overdue tasks
     overdue_count = 0
     today_str = datetime.now().strftime("%Y-%m-%d")
     for t in tasks:
         if t.status != "Done" and t.due_date and t.due_date < today_str:
             overdue_count += 1
+
+    # Completed this week (Mon-Sun)
+    week_start = datetime.now() - timedelta(days=datetime.now().weekday())
+    week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    completed_this_week = 0
+    for t in tasks:
+        if t.status == "Done" and t.completed_at and t.completed_at >= week_start:
+            completed_this_week += 1
+
+    # Per-developer completion rate
+    dev_stats = {}
+    for u in users:
+        if u.role not in [auth.ROLE_DEVELOPER, auth.ROLE_MANAGER]:
+            continue
+        name = u.full_name or u.username
+        assigned = [t for t in tasks if t.assignee_id == u.id]
+        done = [t for t in assigned if t.status == "Done"]
+        dev_stats[name] = {
+            "assigned": len(assigned),
+            "completed": len(done),
+            "rate": round(len(done) / len(assigned) * 100, 1) if assigned else 0
+        }
+
+    # Active sprint velocity snapshot
+    active_sprint = db.query(models.Sprint).filter(models.Sprint.status == "Active").order_by(models.Sprint.start_date.desc()).first()
+    sprint_velocity = None
+    if active_sprint:
+        sprint_tasks = db.query(models.Task).filter(models.Task.sprint_id == active_sprint.id).all()
+        sprint_done = len([t for t in sprint_tasks if t.status == "Done"])
+        sprint_days = max((date_cls.fromisoformat(active_sprint.end_date) - date_cls.fromisoformat(active_sprint.start_date)).days + 1, 1)
+        sprint_velocity = {
+            "sprint_id": active_sprint.id,
+            "sprint_name": active_sprint.name,
+            "completed": sprint_done,
+            "total": len(sprint_tasks),
+            "velocity_per_week": round(sprint_done / sprint_days * 7, 1)
+        }
             
     # Recent logs
     if current_user.role == auth.ROLE_DEVELOPER:
@@ -863,6 +1199,7 @@ def get_analytics(
             "completed": completed,
             "pending": pending,
             "overdue": overdue_count,
+            "completed_this_week": completed_this_week,
             "progress_percent": round(progress_percent, 1),
             "estimated_hours": est_total,
             "actual_hours": act_total
@@ -870,6 +1207,8 @@ def get_analytics(
         "status_distribution": status_counts,
         "category_distribution": category_counts,
         "workload_distribution": workload,
+        "developer_completion": dev_stats,
+        "sprint_velocity": sprint_velocity,
         "recent_logs": recent_logs
     }
 
@@ -948,22 +1287,61 @@ def delete_backup(
         raise HTTPException(status_code=500, detail=f"Failed to delete backup: {str(e)}")
 
 # --- Serve Static Frontend ---
-# Serve index.html at root
-@app.get("/")
-def read_root():
+def _spa_index():
     if os.path.exists("static/index.html"):
         return FileResponse("static/index.html")
     return {"message": "Task Management Server is running! Place your frontend in static/index.html to view."}
 
+@app.get("/")
+def read_root():
+    return _spa_index()
+
 @app.get("/signin")
 def signin():
-    if os.path.exists("static/index.html"):
-        return FileResponse("static/index.html")
-    return {"message": "Task Management Server is running! Place your frontend in static/index.html to view."}
+    return _spa_index()
+
+@app.get("/kanban")
+def spa_kanban():
+    return _spa_index()
+
+@app.get("/all-tasks")
+def spa_all_tasks():
+    return _spa_index()
+
+@app.get("/dashboard")
+def spa_dashboard():
+    return _spa_index()
+
+@app.get("/calendar")
+def spa_calendar():
+    return _spa_index()
+
+@app.get("/projects")
+def spa_projects():
+    return _spa_index()
+
+@app.get("/sprints")
+def spa_sprints():
+    return _spa_index()
+
+@app.get("/users")
+def spa_users():
+    return _spa_index()
+
+@app.get("/backups")
+def spa_backups():
+    return _spa_index()
 
 # Mount static files (PWA support, manifest, service worker)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
+@app.get("/{full_path:path}")
+def spa_fallback(full_path: str):
+    """Serve SPA shell for hard refresh on client-side routes."""
+    if full_path.startswith(("api/", "static/", "uploads/")):
+        raise HTTPException(status_code=404, detail="Not Found")
+    return _spa_index()
 
 if __name__ == "__main__":
     import uvicorn

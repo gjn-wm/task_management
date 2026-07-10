@@ -100,6 +100,7 @@
 }
 
 .project-status-active { background: rgba(13, 148, 136, 0.15); color: var(--signal-green); }
+.project-status-planned { background: rgba(14, 165, 233, 0.15); color: var(--info); }
 .project-status-on-hold { background: rgba(217, 119, 6, 0.15); color: var(--signal-amber); }
 .project-status-closed { background: rgba(100, 116, 139, 0.2); color: var(--text-muted); }
 

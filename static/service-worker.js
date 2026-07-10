@@ -1,7 +1,8 @@
-const CACHE_NAME = "itmsu-cache-v1";
+const CACHE_NAME = "itmsu-cache-v2";
 const ASSETS = [
   "/",
   "/static/manifest.json",
+  "/static/css/app.css",
   "https://cdn.jsdelivr.net/npm/chart.js",
   "https://cdn.jsdelivr.net/npm/marked/marked.min.js",
   "https://cdn.jsdelivr.net/npm/lucide/dist/umd/lucide.min.js"
@@ -31,24 +32,31 @@ self.addEventListener("activate", (e) => {
 });
 
 self.addEventListener("fetch", (e) => {
-  // Let backend APIs pass through directly
-  if (e.request.url.includes("/api/") || e.request.url.includes("/uploads/")) {
+  const url = new URL(e.request.url);
+
+  // Always hit the network for APIs, uploads, and SPA page navigations
+  if (
+    url.pathname.startsWith("/api/") ||
+    url.pathname.startsWith("/uploads/") ||
+    e.request.mode === "navigate"
+  ) {
     return;
   }
+
   e.respondWith(
     caches.match(e.request).then((cachedResponse) => {
       return cachedResponse || fetch(e.request).then((response) => {
-        // Cache new static resources on the fly
-        if (response.status === 200 && e.request.method === "GET") {
+        if (
+          response.status === 200 &&
+          e.request.method === "GET" &&
+          url.pathname.startsWith("/static/")
+        ) {
           const cacheCopy = response.clone();
           caches.open(CACHE_NAME).then((cache) => {
             cache.put(e.request, cacheCopy);
           });
         }
         return response;
-      }).catch(() => {
-        // Offline fallback if fetch fails
-        return caches.match("/");
       });
     })
   );

@@ -295,6 +295,9 @@ async function executeBulkAction(action) {
     } else if (action === 'project') {
         const pid = document.getElementById('bulk-project-select').value;
         payload.project_id = pid ? parseInt(pid) : null;
+    } else if (action === 'sprint') {
+        const sid = document.getElementById('bulk-sprint-select')?.value;
+        payload.sprint_id = sid ? parseInt(sid) : null;
     } else if (action === 'delete') {
         if (!confirm(`Delete ${selectedTaskIds.size} tasks permanently?`)) return;
     }
@@ -424,8 +427,8 @@ function initUpgradeFeatures() {
     };
 
     const origSwitchView = switchView;
-    switchView = function(viewName) {
-        origSwitchView(viewName);
+    switchView = function(viewName, updateUrl) {
+        origSwitchView(viewName, updateUrl);
         if (viewName === 'projects') loadProjectsPanel();
         if (viewName === 'all-tasks') {
             setAllTasksViewMode(allTasksViewMode);
@@ -532,11 +535,14 @@ function initUpgradeFeatures() {
     openTaskEditor = async function(taskId = null) {
         await origOpenTaskEditor(taskId);
         populateProjectDropdowns();
+        if (typeof populateSprintDropdowns === 'function') populateSprintDropdowns();
         if (taskId) {
             try {
                 const task = await apiFetch(`/api/tasks/${taskId}`);
                 const projEl = document.getElementById('editor-project');
                 if (projEl) projEl.value = task.project_id || '';
+                const sprintEl = document.getElementById('editor-sprint');
+                if (sprintEl) sprintEl.value = task.sprint_id || '';
             } catch (err) {
                 console.error(err);
             }
@@ -554,6 +560,7 @@ function initUpgradeFeatures() {
         });
 
         const projectVal = document.getElementById('editor-project')?.value;
+        const sprintVal = document.getElementById('editor-sprint')?.value;
 
         const payload = {
             title: document.getElementById('editor-title').value.trim(),
@@ -566,6 +573,7 @@ function initUpgradeFeatures() {
             actual_hours: parseFloat(document.getElementById('editor-act').value) || 0.0,
             assignee_id: parseInt(document.getElementById('editor-assignee').value) || null,
             project_id: projectVal ? parseInt(projectVal) : null,
+            sprint_id: sprintVal ? parseInt(sprintVal) : null,
             label_ids: checkedLabels
         };
 

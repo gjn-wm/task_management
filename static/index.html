@@ -18,2004 +18,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- Marked.js for Markdown -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <link rel="stylesheet" href="/static/css/upgrade.css">
-
-    <style>
-        :root {
-            /* Color Schema */
-            --bg-primary: #080b12;         /* Deep obsidian black */
-            --bg-secondary: #0f1420;       /* Rich dark slate for navigation and blocks */
-            --bg-tertiary: #171d2d;        /* Muted slate for controls and sub-elements */
-            --bg-card: #131926;            /* Unified card background */
-            --text-primary: #f8fafc;       /* Bright white for text readability */
-            --text-secondary: #94a3b8;     /* Warm gray for descriptions */
-            --text-muted: #64748b;         /* Cool gray for timestamps and borders */
-            --border-color: #20283c;       /* Subtle slate border lines */
-            
-            /* Traffic Signal Colors */
-            --signal-green: #0d9488;       /* Lake Teal (Green Signal) */
-            --signal-amber: #d97706;       /* Amber Warning (Yellow Signal) */
-            --signal-red: #e11d48;         /* Crimson (Red Signal) */
-            --accent-color: #14b8a6;       /* System Teal theme accent */
-            --accent-hover: #0f9688;
-            --info: #0ea5e9;               /* Teal Blue */
-            
-            --glass-bg: rgba(15, 20, 32, 0.85);
-            --glass-border: rgba(255, 255, 255, 0.05);
-            --card-shadow: 0 12px 24px -4px rgba(0, 0, 0, 0.5), 0 4px 12px -2px rgba(0, 0, 0, 0.3);
-            --glow-color: rgba(20, 184, 166, 0.1);
-            
-            --success: var(--signal-green);
-            --warning: var(--signal-amber);
-            --error: var(--signal-red);
-        }
-
-        [data-theme="light"] {
-            --bg-primary: #f1f5f9;         /* Light slate grey background */
-            --bg-secondary: #ffffff;       /* Pure white container backgrounds */
-            --bg-tertiary: #e2e8f0;        /* Cool light gray elements */
-            --bg-card: #ffffff;            /* White task cards */
-            --text-primary: #0f172a;       /* Slate dark primary text */
-            --text-secondary: #475569;     /* Charcoal gray secondary text */
-            --text-muted: #94a3b8;         /* Light gray placeholder/border */
-            --border-color: #cbd5e1;       /* Light border */
-            
-            --signal-green: #0f766e;       /* Deep Lake Teal */
-            --signal-amber: #b45309;       /* Dark Amber warning color */
-            --signal-red: #be123c;         /* Dark stop crimson */
-            --accent-color: #0f766e;
-            --accent-hover: #115e59;
-            --info: #0284c7;
-            
-            --glass-bg: rgba(255, 255, 255, 0.85);
-            --glass-border: rgba(0, 0, 0, 0.08);
-            --card-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.03);
-            --glow-color: rgba(15, 118, 110, 0.05);
-        }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            transition: background-color 0.2s ease, border-color 0.2s ease;
-        }
-
-        body {
-            background-color: var(--bg-primary);
-            color: var(--text-primary);
-            min-height: 100vh;
-            display: flex;
-            overflow-x: hidden;
-        }
-
-        /* Sidebar Navigation Design */
-        aside {
-            width: 260px;
-            background-color: var(--bg-secondary);
-            border-right: 1px solid var(--border-color);
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-            height: 100vh;
-            position: fixed;
-            z-index: 100;
-            padding: 24px 16px;
-        }
-
-        .brand {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 28px;
-            padding: 0 8px;
-        }
-
-        .brand img {
-            width: 40px;
-            height: 40px;
-            border-radius: 10px;
-            object-fit: cover;
-            border: 2px solid var(--accent-color);
-            box-shadow: 0 0 10px rgba(20, 184, 166, 0.3);
-        }
-
-        .brand-text h1 {
-            font-size: 15px;
-            font-weight: 800;
-            letter-spacing: -0.3px;
-            background: linear-gradient(135deg, var(--accent-color), var(--info));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-
-        .brand-text span {
-            font-size: 11px;
-            color: var(--text-muted);
-            font-weight: 500;
-            display: block;
-        }
-
-        nav {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            flex-grow: 1;
-        }
-
-        .nav-item {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 12px 14px;
-            color: var(--text-secondary);
-            text-decoration: none;
-            border-radius: 8px;
-            font-weight: 500;
-            font-size: 14px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-
-        .nav-item:hover {
-            color: var(--text-primary);
-            background-color: var(--bg-tertiary);
-        }
-
-        .nav-item.active {
-            color: var(--text-primary);
-            background-color: var(--accent-color);
-            box-shadow: 0 4px 14px rgba(20, 184, 166, 0.35);
-        }
-
-        .nav-item i {
-            width: 18px;
-            height: 18px;
-        }
-
-        .sidebar-footer {
-            border-top: 1px solid var(--border-color);
-            padding-top: 16px;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .user-badge {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 8px;
-            border-radius: 8px;
-            background-color: var(--bg-tertiary);
-        }
-
-        .user-avatar {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, var(--accent-color), var(--info));
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-            color: white;
-            font-size: 14px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-        }
-
-        .user-info {
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            flex-grow: 1;
-        }
-
-        .user-name {
-            font-size: 13px;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-
-        .user-role {
-            font-size: 11px;
-            color: var(--text-muted);
-        }
-
-        .sidebar-buttons {
-            display: flex;
-            gap: 8px;
-        }
-
-        .icon-btn {
-            flex: 1;
-            padding: 10px;
-            border: 1px solid var(--border-color);
-            background: transparent;
-            color: var(--text-secondary);
-            border-radius: 6px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.2s ease;
-        }
-
-        .icon-btn:hover {
-            color: var(--text-primary);
-            background-color: var(--bg-tertiary);
-            border-color: var(--text-muted);
-        }
-
-        .logout-btn {
-            color: var(--error);
-        }
-
-        .logout-btn:hover {
-            background-color: rgba(225, 29, 72, 0.08);
-            border-color: var(--error);
-        }
-
-        /* Workspace Core Layout */
-        main {
-            margin-left: 260px;
-            flex-grow: 1;
-            padding: 32px 40px;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            width: calc(100% - 260px);
-        }
-
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 28px;
-            gap: 16px;
-            border-bottom: 1px solid var(--border-color);
-            padding-bottom: 18px;
-            flex-wrap: wrap;
-        }
-
-        .page-title h2 {
-            font-size: 24px;
-            font-weight: 800;
-            letter-spacing: -0.5px;
-        }
-
-        .page-title p {
-            font-size: 14px;
-            color: var(--text-secondary);
-            margin-top: 2px;
-        }
-
-        .header-actions {
-            display: flex;
-            gap: 12px;
-            align-items: center;
-        }
-
-        .header-clock {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-size: 13px;
-            color: var(--text-secondary);
-            font-weight: 500;
-            box-shadow: var(--card-shadow);
-        }
-
-        .header-clock i {
-            color: var(--accent-color);
-            width: 14px;
-            height: 14px;
-        }
-
-        .primary-btn {
-            background-color: var(--accent-color);
-            color: white;
-            border: none;
-            padding: 10px 18px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 14px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            box-shadow: 0 4px 10px rgba(20, 184, 166, 0.25);
-            transition: all 0.2s ease;
-        }
-
-        .primary-btn:hover {
-            background-color: var(--accent-hover);
-            transform: translateY(-1px);
-        }
-
-        /* Section Visibility Toggle */
-        .content-section {
-            display: none;
-            flex-direction: column;
-            flex-grow: 1;
-            animation: fadeIn 0.2s ease;
-        }
-
-        .content-section.active {
-            display: flex;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(6px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        /* Search & Filter Bar */
-        .filter-bar {
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 16px 20px;
-            margin-bottom: 24px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            align-items: center;
-            box-shadow: var(--card-shadow);
-        }
-
-        .search-wrapper {
-            position: relative;
-            flex-grow: 1;
-            min-width: 220px;
-        }
-
-        .search-wrapper i {
-            position: absolute;
-            left: 14px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: var(--text-muted);
-            width: 16px;
-            height: 16px;
-        }
-
-        .input-field {
-            background-color: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            color: var(--text-primary);
-            padding: 10px 14px;
-            font-size: 14px;
-            outline: none;
-            width: 100%;
-            transition: all 0.2s ease;
-        }
-
-        .search-wrapper .input-field {
-            padding-left: 40px;
-        }
-
-        .input-field:focus {
-            border-color: var(--accent-color);
-            box-shadow: 0 0 0 3px var(--glow-color);
-        }
-
-        select.input-field {
-            cursor: pointer;
-            padding-right: 32px;
-            appearance: none;
-            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
-            background-repeat: no-repeat;
-            background-position: right 12px center;
-            background-size: 14px;
-        }
-
-        .filter-select {
-            width: 170px;
-        }
-
-        .secondary-btn {
-            background-color: var(--bg-tertiary);
-            color: var(--text-primary);
-            border: 1px solid var(--border-color);
-            padding: 10px 16px;
-            border-radius: 8px;
-            font-weight: 500;
-            font-size: 14px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            transition: all 0.2s ease;
-        }
-
-        .secondary-btn:hover {
-            background-color: var(--border-color);
-        }
-
-        /* Kanban Columns */
-        .board-container {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 16px;
-            padding-bottom: 16px;
-            width: 100%;
-        }
-
-        .board-column {
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 12px 10px;
-            display: flex;
-            flex-direction: column;
-            max-height: calc(100vh - 240px);
-            box-shadow: var(--card-shadow);
-            min-height: 300px;
-        }
-
-        .column-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 16px;
-            padding: 0 4px;
-        }
-
-        .column-title {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .column-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-        }
-
-        .dot-backlog { background-color: var(--text-muted); }
-        .dot-todo { background-color: var(--info); }
-        .dot-progress { background-color: var(--accent-color); }
-        .dot-review { background-color: var(--warning); }
-        .dot-testing { background-color: #a855f7; }
-        .dot-done { background-color: var(--success); }
-
-        .column-header h3 {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-
-        .column-count {
-            background-color: var(--bg-tertiary);
-            color: var(--text-secondary);
-            font-size: 11px;
-            font-weight: 700;
-            padding: 2px 8px;
-            border-radius: 12px;
-        }
-
-        .cards-list {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            overflow-y: auto;
-            flex-grow: 1;
-            min-height: 150px;
-            padding: 2px;
-        }
-
-        /* Task Card Styling */
-        .task-card {
-            background-color: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 10px;
-            padding: 16px;
-            cursor: grab;
-            position: relative;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-            transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-        }
-
-        .task-card:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--card-shadow);
-            border-color: var(--text-muted);
-        }
-
-        .task-card:active {
-            cursor: grabbing;
-        }
-
-        .task-card.dragging {
-            opacity: 0.4;
-            border: 2px dashed var(--accent-color);
-        }
-
-        .card-tags {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            margin-bottom: 10px;
-        }
-
-        .tag {
-            font-size: 10px;
-            font-weight: 600;
-            padding: 2px 8px;
-            border-radius: 12px;
-            color: white;
-            text-shadow: 0 1px 1px rgba(0, 0, 0, 0.2);
-        }
-
-        .cat-tag {
-            background-color: var(--bg-tertiary);
-            color: var(--text-secondary);
-            border: 1px solid var(--border-color);
-        }
-
-        .pri-tag {
-            font-size: 9px;
-            letter-spacing: 0.3px;
-        }
-
-        .pri-low { background-color: var(--success); }
-        .pri-medium { background-color: var(--warning); color: #000; text-shadow: none; }
-        .pri-high { background-color: #f97316; }
-        .pri-critical { background-color: var(--error); }
-
-        .card-title {
-            font-size: 14px;
-            font-weight: 600;
-            line-height: 1.4;
-            color: var(--text-primary);
-            margin-bottom: 8px;
-            word-wrap: break-word;
-        }
-
-        .card-desc-preview {
-            font-size: 12px;
-            color: var(--text-secondary);
-            margin-bottom: 12px;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-            word-wrap: break-word;
-        }
-
-        .card-custom-labels {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px;
-            margin-bottom: 12px;
-        }
-
-        .custom-label-pill {
-            width: 16px;
-            height: 6px;
-            border-radius: 4px;
-        }
-
-        .card-footer {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-top: 1px solid var(--border-color);
-            padding-top: 10px;
-            font-size: 11px;
-            color: var(--text-muted);
-        }
-
-        .card-meta {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .meta-item {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            font-weight: 500;
-        }
-
-        .meta-item.overdue {
-            color: var(--error);
-        }
-        
-        .meta-item.due-today {
-            color: var(--warning);
-        }
-
-        .meta-item i {
-            width: 12px;
-            height: 12px;
-        }
-
-        .card-assignee {
-            width: 24px;
-            height: 24px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, var(--accent-color), var(--info));
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-            color: white;
-            font-size: 10px;
-            cursor: pointer;
-            position: relative;
-        }
-
-        .card-assignee.unassigned {
-            background: var(--bg-tertiary);
-            color: var(--text-muted);
-            border: 1px dashed var(--border-color);
-        }
-
-        /* Modal Overlays and Dialogs */
-        .modal-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: rgba(0, 0, 0, 0.7);
-            backdrop-filter: blur(4px);
-            z-index: 1000;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-            overflow-y: auto;
-        }
-
-        .modal-overlay.active {
-            display: flex;
-        }
-
-        .modal-container {
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 16px;
-            width: 100%;
-            max-width: 650px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
-            animation: modalSlide 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            max-height: 90vh;
-        }
-
-        .modal-body {
-            overflow-y: auto;
-            max-height: calc(90vh - 160px);
-            -webkit-overflow-scrolling: touch;
-        }
-
-        .modal-container.large {
-            max-width: 900px;
-        }
-
-        @keyframes modalSlide {
-            from { opacity: 0; transform: translateY(14px) scale(0.98); }
-            to { opacity: 1; transform: translateY(0) scale(1); }
-        }
-
-        .modal-header {
-            padding: 20px 24px;
-            border-bottom: 1px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .modal-header h3 {
-            font-size: 18px;
-            font-weight: 700;
-        }
-
-        .close-btn {
-            background: transparent;
-            border: none;
-            color: var(--text-secondary);
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            transition: all 0.2s ease;
-        }
-
-        .close-btn:hover {
-            background-color: var(--bg-tertiary);
-            color: var(--text-primary);
-        }
-
-        .modal-body {
-            padding: 24px;
-            overflow-y: auto;
-            flex-grow: 1;
-            max-height: calc(90vh - 160px);
-        }
-
-        .modal-footer {
-            padding: 16px 24px;
-            border-top: 1px solid var(--border-color);
-            display: flex;
-            justify-content: flex-end;
-            gap: 12px;
-            background-color: var(--bg-tertiary);
-        }
-
-        /* Form Details */
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-
-        label {
-            display: block;
-            font-size: 13px;
-            font-weight: 600;
-            color: var(--text-secondary);
-            margin-bottom: 8px;
-        }
-
-        textarea.input-field {
-            min-height: 120px;
-            resize: vertical;
-        }
-
-        /* Checkbox selectors */
-        .checkbox-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-            gap: 10px;
-            background-color: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            padding: 12px;
-            border-radius: 8px;
-            max-height: 150px;
-            overflow-y: auto;
-        }
-
-        .checkbox-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 13px;
-            cursor: pointer;
-        }
-
-        .checkbox-item input {
-            cursor: pointer;
-            width: 16px;
-            height: 16px;
-            accent-color: var(--accent-color);
-        }
-
-        /* Fullscreen Login Page Overlay */
-        .login-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: var(--bg-primary);
-            z-index: 10000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-
-        .login-card {
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            width: 100%;
-            max-width: 420px;
-            border-radius: 16px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
-            padding: 40px 32px;
-            text-align: center;
-        }
-
-        .login-logo {
-            width: 80px;
-            height: 80px;
-            border-radius: 18px;
-            margin: 0 auto 20px;
-            object-fit: cover;
-            border: 2px solid var(--accent-color);
-            box-shadow: 0 4px 15px rgba(20, 184, 166, 0.2);
-        }
-
-        .login-card h2 {
-            font-size: 22px;
-            font-weight: 800;
-            margin-bottom: 8px;
-            letter-spacing: -0.5px;
-        }
-
-        .login-card p {
-            font-size: 14px;
-            color: var(--text-secondary);
-            margin-bottom: 32px;
-        }
-
-        .login-error {
-            color: var(--signal-red);
-            font-size: 13px;
-            margin-bottom: 16px;
-            background-color: rgba(225, 29, 72, 0.08);
-            padding: 10px;
-            border-radius: 8px;
-            border: 1px solid rgba(225, 29, 72, 0.2);
-            display: none;
-        }
-
-        /* Detail Modal Tab Layouts */
-        .task-detail-grid {
-            display: grid;
-            grid-template-columns: 2.2fr 1fr;
-            gap: 28px;
-        }
-
-        .task-detail-main {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-
-        .task-detail-side {
-            background-color: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-            height: fit-content;
-        }
-
-        .detail-meta-group {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .detail-meta-group span.meta-label {
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-            color: var(--text-muted);
-            letter-spacing: 0.5px;
-        }
-
-        .detail-meta-group span.meta-value {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-
-        /* Detail Modal Tabs */
-        .tabs-header {
-            display: flex;
-            border-bottom: 1px solid var(--border-color);
-            margin-bottom: 16px;
-            gap: 16px;
-        }
-
-        .tab-btn {
-            background: transparent;
-            border: none;
-            color: var(--text-secondary);
-            font-size: 14px;
-            font-weight: 600;
-            padding: 10px 4px;
-            cursor: pointer;
-            position: relative;
-            outline: none;
-        }
-
-        .tab-btn:hover {
-            color: var(--text-primary);
-        }
-
-        .tab-btn.active {
-            color: var(--accent-color);
-        }
-
-        .tab-btn.active::after {
-            content: '';
-            position: absolute;
-            bottom: -1px;
-            left: 0;
-            right: 0;
-            height: 2px;
-            background-color: var(--accent-color);
-        }
-
-        .tab-content {
-            display: none;
-        }
-
-        .tab-content.active {
-            display: block;
-        }
-
-        .markdown-body {
-            font-size: 14.5px;
-            line-height: 1.6;
-            color: var(--text-primary);
-        }
-
-        .markdown-body h1, .markdown-body h2, .markdown-body h3 {
-            margin-top: 16px;
-            margin-bottom: 8px;
-            font-weight: 700;
-        }
-
-        .markdown-body p {
-            margin-bottom: 12px;
-        }
-
-        .markdown-body code {
-            background-color: var(--bg-tertiary);
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-family: monospace;
-            font-size: 13px;
-        }
-
-        .markdown-body ul, .markdown-body ol {
-            margin-left: 20px;
-            margin-bottom: 12px;
-        }
-
-        /* Task Comments List */
-        .comments-section {
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-            max-height: 300px;
-            overflow-y: auto;
-            padding-right: 8px;
-            margin-bottom: 16px;
-        }
-
-        .comment-item {
-            background-color: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: 10px;
-            padding: 12px 16px;
-        }
-
-        .comment-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 6px;
-            font-size: 12px;
-        }
-
-        .comment-author {
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-
-        .comment-date {
-            color: var(--text-muted);
-        }
-
-        .comment-text {
-            font-size: 13px;
-            color: var(--text-secondary);
-            line-height: 1.5;
-            white-space: pre-wrap;
-        }
-
-        .comment-delete {
-            color: var(--error);
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            opacity: 0.6;
-            transition: opacity 0.2s;
-        }
-
-        .comment-delete:hover {
-            opacity: 1;
-        }
-
-        .comment-form {
-            display: flex;
-            gap: 10px;
-        }
-
-        /* Attachments Styling */
-        .attachments-list {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            max-height: 250px;
-            overflow-y: auto;
-            margin-bottom: 16px;
-        }
-
-        .attachment-item {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            background-color: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            padding: 10px 14px;
-            border-radius: 8px;
-        }
-
-        .attachment-info {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            overflow: hidden;
-        }
-
-        .attachment-info i {
-            color: var(--accent-color);
-            flex-shrink: 0;
-        }
-
-        .attachment-details {
-            overflow: hidden;
-        }
-
-        .attachment-name {
-            font-size: 13px;
-            font-weight: 600;
-            text-decoration: none;
-            color: var(--text-primary);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            display: block;
-        }
-
-        .attachment-name:hover {
-            color: var(--accent-color);
-        }
-
-        .attachment-meta {
-            font-size: 11px;
-            color: var(--text-muted);
-        }
-
-        /* Analytics View Design */
-        .kpi-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 20px;
-            margin-bottom: 28px;
-        }
-
-        .kpi-card {
-            cursor: pointer;
-        }
-
-        .kpi-card:hover {
-            transform: translateY(-4px);
-            border-color: var(--accent-color);
-            box-shadow: 0 8px 20px rgba(20, 184, 166, 0.15);
-        }
-
-        /* All Tasks View Styling */
-        .all-tasks-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
-
-        .all-tasks-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 16px;
-            margin-bottom: 20px;
-        }
-
-        .task-list-card {
-            background-color: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 10px;
-            padding: 16px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-
-        .task-list-card:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--card-shadow);
-            border-color: var(--accent-color);
-        }
-
-        .pagination-container {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 12px;
-            margin-top: 24px;
-            flex-wrap: wrap;
-        }
-
-        .pagination-btn {
-            background-color: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            color: var(--text-primary);
-            padding: 8px 12px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 500;
-            transition: all 0.2s ease;
-        }
-
-        .pagination-btn:hover:not(:disabled) {
-            background-color: var(--accent-color);
-            color: white;
-            border-color: var(--accent-color);
-        }
-
-        .pagination-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .pagination-info {
-            color: var(--text-secondary);
-            font-size: 12px;
-        }
-
-        .all-tasks-empty {
-            text-align: center;
-            padding: 40px 20px;
-            color: var(--text-muted);
-        }
-
-        .all-tasks-empty i {
-            width: 48px;
-            height: 48px;
-            margin-bottom: 16px;
-            opacity: 0.5;
-        }
-
-        .kpi-card {
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: var(--card-shadow);
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-
-        .kpi-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background-color: var(--glow-color);
-            color: var(--accent-color);
-        }
-
-        .kpi-icon.success { background-color: rgba(13, 148, 136, 0.08); color: var(--success); }
-        .kpi-icon.warning { background-color: rgba(217, 119, 6, 0.08); color: var(--warning); }
-        .kpi-icon.error { background-color: rgba(225, 29, 72, 0.08); color: var(--error); }
-
-        .kpi-data h4 {
-            font-size: 24px;
-            font-weight: 800;
-            letter-spacing: -0.5px;
-        }
-
-        .kpi-data p {
-            font-size: 13px;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-
-        .dashboard-charts-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 24px;
-            margin-bottom: 28px;
-        }
-
-        .chart-card {
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 24px;
-            box-shadow: var(--card-shadow);
-            display: flex;
-            flex-direction: column;
-            height: 320px;
-        }
-
-        .chart-card.full-width {
-            grid-column: span 2;
-            height: auto;
-        }
-
-        .chart-card h3 {
-            font-size: 15px;
-            font-weight: 700;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .chart-container {
-            position: relative;
-            flex-grow: 1;
-            width: 100%;
-            height: 100%;
-            min-height: 200px;
-        }
-
-        .activity-feed-card {
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 24px;
-            box-shadow: var(--card-shadow);
-            max-height: 400px;
-            overflow-y: auto;
-        }
-
-        .activity-feed-card h3 {
-            font-size: 15px;
-            font-weight: 700;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .activity-list {
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-        }
-
-        .activity-item {
-            display: flex;
-            gap: 16px;
-            font-size: 13px;
-            line-height: 1.4;
-            border-left: 2px solid var(--border-color);
-            padding-left: 16px;
-            position: relative;
-        }
-
-        .activity-item::before {
-            content: '';
-            position: absolute;
-            left: -5px;
-            top: 4px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background-color: var(--accent-color);
-        }
-
-        .activity-user {
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-
-        .activity-action {
-            color: var(--text-secondary);
-        }
-
-        .activity-details {
-            font-size: 11px;
-            color: var(--text-muted);
-            margin-top: 2px;
-        }
-
-        .activity-time {
-            font-size: 11px;
-            color: var(--text-muted);
-            white-space: nowrap;
-            margin-left: auto;
-        }
-
-        /* Calendar Styling */
-        .calendar-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-
-        .calendar-title {
-            font-size: 18px;
-            font-weight: 700;
-        }
-
-        .calendar-nav-buttons {
-            display: flex;
-            gap: 8px;
-        }
-
-        .calendar-grid {
-            display: grid;
-            grid-template-columns: repeat(7, 1fr);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            overflow: hidden;
-            box-shadow: var(--card-shadow);
-            background-color: var(--bg-secondary);
-            flex-grow: 1;
-        }
-
-        .calendar-day-header {
-            background-color: var(--bg-tertiary);
-            border-bottom: 1px solid var(--border-color);
-            padding: 12px;
-            text-align: center;
-            font-weight: 600;
-            font-size: 12px;
-            color: var(--text-secondary);
-        }
-
-        .calendar-day-cell {
-            border-right: 1px solid var(--border-color);
-            border-bottom: 1px solid var(--border-color);
-            padding: 8px;
-            min-height: 100px;
-            background-color: var(--bg-card);
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .calendar-day-cell:nth-child(7n) {
-            border-right: none;
-        }
-
-        .calendar-day-cell.other-month {
-            background-color: var(--bg-secondary);
-            opacity: 0.5;
-        }
-
-        .calendar-day-cell.today {
-            background-color: var(--glow-color);
-            border: 2px solid var(--accent-color) !important;
-        }
-
-        .calendar-day-num {
-            font-size: 12px;
-            font-weight: 700;
-            color: var(--text-secondary);
-        }
-
-        .calendar-day-cell.today .calendar-day-num {
-            color: var(--accent-color);
-        }
-
-        .calendar-tasks {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            overflow-y: auto;
-            flex-grow: 1;
-            max-height: 80px;
-        }
-
-        .calendar-task-badge {
-            font-size: 10px;
-            padding: 2px 6px;
-            border-radius: 4px;
-            color: white;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            font-weight: 500;
-            cursor: pointer;
-        }
-
-        /* Clean Panel Tables */
-        .panel-table-card {
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 24px;
-            box-shadow: var(--card-shadow);
-            margin-bottom: 24px;
-        }
-
-        .panel-table-card h3 {
-            font-size: 16px;
-            font-weight: 700;
-            margin-bottom: 16px;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            text-align: left;
-        }
-
-        th {
-            padding: 12px 16px;
-            border-bottom: 1.5px solid var(--border-color);
-            color: var(--text-muted);
-            font-size: 12px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        td {
-            padding: 16px;
-            border-bottom: 1px solid var(--border-color);
-            font-size: 14px;
-        }
-
-        tr:last-child td {
-            border-bottom: none;
-        }
-
-        .action-cell {
-            display: flex;
-            gap: 8px;
-        }
-
-        /* Auto-Disappearing Toast System */
-        .toast-container {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            z-index: 10000;
-        }
-
-        .toast {
-            position: relative;
-            background-color: var(--bg-secondary);
-            border-left: 4px solid var(--accent-color);
-            box-shadow: var(--card-shadow);
-            color: var(--text-primary);
-            padding: 16px 20px 20px 20px;
-            border-radius: 8px;
-            font-size: 13.5px;
-            font-weight: 500;
-            overflow: hidden;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            min-width: 300px;
-            border: 1px solid var(--border-color);
-            border-left-width: 4px;
-            animation: toastIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-        }
-
-        .toast.success { border-left-color: var(--success); }
-        .toast.error { border-left-color: var(--error); }
-        .toast.info { border-left-color: var(--info); }
-        .toast.warning { border-left-color: var(--warning); }
-
-        @keyframes toastIn {
-            from { transform: translateX(120%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
-        }
-
-        @keyframes toastOut {
-            from { transform: translateX(0); opacity: 1; }
-            to { transform: translateX(120%); opacity: 0; }
-        }
-
-        .toast-progress {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            height: 4px;
-            background-color: var(--accent-color);
-            width: 100%;
-        }
-
-        .toast.success .toast-progress { background-color: var(--success); }
-        .toast.error .toast-progress { background-color: var(--error); }
-        .toast.info .toast-progress { background-color: var(--info); }
-        .toast.warning .toast-progress { background-color: var(--warning); }
-
-        /* Label Badges */
-        .label-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 12px;
-            border-radius: 20px;
-            color: white;
-            font-size: 12px;
-            font-weight: 600;
-            margin-right: 8px;
-            margin-bottom: 8px;
-        }
-
-        .label-badge button {
-            background: transparent;
-            border: none;
-            color: white;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            opacity: 0.7;
-        }
-
-        .label-badge button:hover {
-            opacity: 1;
-        }
-
-        /* responsive grid for table views */
-        .viewer-task-table {
-            width: 100%;
-        }
-
-        /* Responsive Styles */
-        @media (max-width: 1024px) {
-            .dashboard-charts-grid {
-                grid-template-columns: 1fr;
-            }
-            .chart-card.full-width {
-                grid-column: span 1;
-            }
-            .board-container {
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            }
-        }
-
-        @media (max-width: 768px) {
-            body {
-                flex-direction: column;
-            }
-            aside {
-                width: 100%;
-                height: auto;
-                position: relative;
-                border-right: none;
-                border-bottom: 1px solid var(--border-color);
-                padding: 16px;
-                display: flex;
-                flex-direction: row;
-                justify-content: space-between;
-                align-items: center;
-            }
-            .brand {
-                margin-bottom: 0;
-                flex-shrink: 0;
-            }
-            .brand-text h1 {
-                font-size: 13px;
-            }
-            nav {
-                flex-direction: row;
-                overflow-x: auto;
-                padding-bottom: 8px;
-                gap: 4px;
-                flex-grow: 1;
-                margin: 0 16px;
-            }
-            .nav-item {
-                padding: 10px 12px;
-                font-size: 13px;
-                white-space: nowrap;
-                flex-shrink: 0;
-            }
-            .sidebar-footer {
-                display: flex;
-                border-top: none;
-                padding-top: 0;
-                padding-left: 16px;
-                border-left: 1px solid var(--border-color);
-                gap: 8px;
-                flex-direction: row;
-            }
-            .user-badge {
-                display: none;
-            }
-            .sidebar-buttons {
-                display: flex;
-                gap: 6px;
-            }
-            .icon-btn {
-                width: 36px;
-                height: 36px;
-                padding: 8px;
-            }
-            main {
-                margin-left: 0;
-                padding: 16px;
-                width: 100%;
-            }
-            header {
-                flex-direction: column;
-                margin-bottom: 16px;
-                gap: 12px;
-                padding-bottom: 12px;
-            }
-            .page-title h2 {
-                font-size: 20px;
-            }
-            .header-actions {
-                width: 100%;
-                flex-direction: column;
-                gap: 8px;
-            }
-            .header-clock {
-                width: 100%;
-                justify-content: center;
-            }
-            .primary-btn {
-                width: 100%;
-                justify-content: center;
-                padding: 12px 16px;
-                font-size: 13px;
-            }
-            .filter-bar {
-                flex-direction: column;
-                gap: 10px;
-            }
-            .search-wrapper {
-                min-width: 100%;
-                flex-grow: 1;
-            }
-            .filter-select {
-                width: 100%;
-            }
-            .secondary-btn {
-                width: 100%;
-            }
-            .form-row {
-                grid-template-columns: 1fr;
-                gap: 0;
-            }
-            .task-detail-grid {
-                grid-template-columns: 1fr;
-            }
-            .board-container {
-                grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-                gap: 12px;
-            }
-            .board-column {
-                min-height: 300px;
-                max-height: calc(100vh - 300px);
-                padding: 10px 8px;
-            }
-            .modal-container {
-                max-width: 95%;
-                max-height: 95vh;
-                width: 100%;
-            }
-            .modal-body {
-                padding: 16px;
-            }
-            .form-group {
-                margin-bottom: 16px;
-            }
-            label {
-                font-size: 12px;
-                margin-bottom: 6px;
-            }
-            .input-field {
-                padding: 10px 12px;
-                font-size: 14px;
-            }
-            textarea.input-field {
-                min-height: 100px;
-            }
-            .checkbox-grid {
-                grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-                gap: 8px;
-                padding: 10px;
-                max-height: 120px;
-            }
-            .modal-header {
-                padding: 16px;
-            }
-            .modal-header h3 {
-                font-size: 16px;
-            }
-            .modal-footer {
-                padding: 12px 16px;
-                flex-wrap: wrap;
-                gap: 8px;
-            }
-            .secondary-btn,
-            .primary-btn {
-                flex: 1;
-                min-width: 100px;
-                padding: 10px 12px;
-                font-size: 12px;
-            }
-            .kpi-grid {
-                grid-template-columns: repeat(2, 1fr);
-                gap: 12px;
-            }
-
-            .all-tasks-grid {
-                grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-            }
-            .kpi-card {
-                padding: 16px;
-                gap: 12px;
-            }
-            .kpi-icon {
-                width: 40px;
-                height: 40px;
-            }
-            .kpi-data h4 {
-                font-size: 18px;
-            }
-
-            .kpi-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-
-            .all-tasks-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .pagination-container {
-                gap: 8px;
-            }
-        }
-
-        /* Small screens (tablets in portrait) */
-        @media (max-width: 768px) {
-            .kpi-grid {
-                grid-template-columns: repeat(2, 1fr);
-                gap: 12px;
-            }
-
-            .all-tasks-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .all-tasks-header {
-                flex-direction: column;
-            }
-        }
-
-        @media (max-width: 480px) {
-            aside {
-                flex-wrap: wrap;
-                gap: 12px;
-                padding: 12px;
-            }
-            .brand img {
-                width: 32px;
-                height: 32px;
-            }
-            .brand-text h1 {
-                font-size: 12px;
-            }
-            nav {
-                margin: 0;
-                width: 100%;
-                order: 3;
-                border-top: 1px solid var(--border-color);
-                padding-top: 8px;
-                gap: 4px;
-            }
-            .nav-item {
-                padding: 8px 10px;
-                font-size: 12px;
-                gap: 6px;
-            }
-            .nav-item i {
-                width: 16px;
-                height: 16px;
-            }
-            .sidebar-footer {
-                order: 2;
-                padding-left: 8px;
-            }
-            main {
-                padding: 12px;
-            }
-            header {
-                margin-bottom: 12px;
-                padding-bottom: 8px;
-            }
-            .page-title h2 {
-                font-size: 18px;
-            }
-            .page-title p {
-                font-size: 12px;
-            }
-            .primary-btn {
-                padding: 10px 12px;
-                font-size: 12px;
-            }
-            .filter-bar {
-                padding: 12px;
-                gap: 8px;
-                margin-bottom: 16px;
-            }
-            .input-field {
-                padding: 8px 10px;
-                font-size: 13px;
-            }
-            .search-wrapper i {
-                left: 10px;
-            }
-            .board-container {
-                grid-template-columns: 1fr;
-            }
-            .board-column {
-                padding: 12px 8px;
-                border-radius: 10px;
-                min-height: 300px;
-            }
-            .column-header {
-                margin-bottom: 12px;
-            }
-            .column-header h3 {
-                font-size: 13px;
-            }
-            .task-card {
-                padding: 12px;
-                border-radius: 8px;
-            }
-            .card-title {
-                font-size: 13px;
-                margin-bottom: 6px;
-            }
-            .card-desc-preview {
-                font-size: 11px;
-                margin-bottom: 8px;
-            }
-            .card-footer {
-                padding-top: 8px;
-                font-size: 10px;
-            }
-            .modal-overlay {
-                padding: 12px;
-            }
-            .modal-container {
-                max-width: 100%;
-                border-radius: 12px;
-            }
-            .modal-header {
-                padding: 12px;
-                gap: 8px;
-            }
-            .close-btn {
-                width: 28px;
-                height: 28px;
-            }
-            .modal-body {
-                padding: 12px;
-            }
-            label {
-                font-size: 11px;
-            }
-            .form-group {
-                margin-bottom: 12px;
-            }
-            textarea.input-field {
-                min-height: 80px;
-            }
-            .checkbox-grid {
-                grid-template-columns: 1fr;
-                max-height: 100px;
-            }
-            .checkbox-item {
-                font-size: 12px;
-            }
-            .modal-footer {
-                padding: 10px 12px;
-            }
-            .secondary-btn,
-            .primary-btn {
-                padding: 8px 10px;
-                font-size: 11px;
-                min-width: 80px;
-            }
-            .login-card {
-                padding: 24px 20px;
-            }
-            .login-logo {
-                width: 60px;
-                height: 60px;
-            }
-            .login-card h2 {
-                font-size: 18px;
-            }
-            .tabs-header {
-                gap: 12px;
-                margin-bottom: 12px;
-            }
-            .tab-btn {
-                font-size: 12px;
-                padding: 8px 2px;
-            }
-            .comment-item {
-                padding: 10px 12px;
-            }
-            .attachment-item {
-                padding: 8px 10px;
-            }
-            .detail-meta-group {
-                gap: 2px;
-            }
-            .detail-meta-group span.meta-label {
-                font-size: 10px;
-            }
-            .detail-meta-group span.meta-value {
-                font-size: 12px;
-            }
-        }
-
-        /* Extra small screens (phones in portrait) */
-        @media (max-width: 360px) {
-            .brand-text h1 {
-                font-size: 11px;
-            }
-            .nav-item {
-                padding: 6px 8px;
-                font-size: 11px;
-            }
-            main {
-                padding: 8px;
-            }
-            .page-title h2 {
-                font-size: 16px;
-            }
-            .primary-btn {
-                padding: 8px 10px;
-                font-size: 11px;
-            }
-            .modal-container {
-                border-radius: 10px;
-            }
-            .task-card {
-                padding: 10px;
-            }
-            .card-title {
-                font-size: 12px;
-            }
-            .input-field {
-                padding: 7px 8px;
-                font-size: 12px;
-            }
-        }
-    </style>
+    <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
 
@@ -2045,8 +48,30 @@
         </div>
     </div>
 
+    <!-- Mobile sidebar backdrop -->
+    <div id="sidebar-backdrop" class="sidebar-backdrop" onclick="toggleMobileNav(true)"></div>
+
+    <!-- Mobile top bar -->
+    <div class="mobile-topbar">
+        <button type="button" class="mobile-menu-btn" onclick="toggleMobileNav()" aria-label="Open menu">
+            <i data-lucide="menu"></i>
+        </button>
+        <div class="brand">
+            <img src="/static/logo.jpg" alt="Logo">
+            <div class="brand-text">
+                <h1>Task Management</h1>
+            </div>
+        </div>
+        <button type="button" class="mobile-menu-btn" onclick="toggleTheme()" aria-label="Toggle theme">
+            <i data-lucide="sun" id="mobile-theme-icon"></i>
+        </button>
+    </div>
+
     <!-- Sidebar Drawer -->
     <aside>
+        <button type="button" class="sidebar-collapse-btn" onclick="toggleSidebarCollapse()" title="Collapse sidebar" aria-label="Collapse sidebar">
+            <i data-lucide="panel-left-close"></i>
+        </button>
         <div class="brand">
             <img src="/static/logo.jpg" alt="Logo">
             <div class="brand-text">
@@ -2070,6 +95,9 @@
             </div>
             <div class="nav-item" onclick="switchView('projects')" id="nav-projects">
                 <i data-lucide="folder-kanban"></i> Projects
+            </div>
+            <div class="nav-item" onclick="switchView('sprints')" id="nav-sprints">
+                <i data-lucide="zap"></i> Sprints
             </div>
             <div class="nav-item admin-only" onclick="switchView('users')" id="nav-users" style="display: none;">
                 <i data-lucide="users"></i> Team Members
@@ -2118,16 +146,34 @@
                     <i data-lucide="clock"></i>
                     <span id="live-clock-time">Loading Clock...</span>
                 </div>
+                <div class="notification-bell-wrap read-write-only" id="notification-bell-wrap" style="position:relative;">
+                    <button class="icon-btn" onclick="toggleNotificationDropdown()" title="Due date alerts">
+                        <i data-lucide="bell"></i>
+                        <span class="notification-badge" id="notification-badge" style="display:none;">0</span>
+                    </button>
+                    <div class="notification-dropdown" id="notification-dropdown">
+                        <div style="padding:12px 14px;border-bottom:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center;">
+                            <strong style="font-size:13px;">Alerts</strong>
+                            <button type="button" class="secondary-btn notification-mark-all" onclick="markAllNotificationsRead(event)">Mark all read</button>
+                        </div>
+                        <div id="notification-list"></div>
+                    </div>
+                </div>
                 <button class="primary-btn read-write-only" id="create-task-btn" onclick="openTaskEditor()">
-                    <i data-lucide="plus"></i> Add New Task
+                    <i data-lucide="plus"></i> <span class="btn-label">Add New Task</span>
                 </button>
             </div>
         </header>
 
         <!-- KANBAN/TASKS VIEW -->
         <section id="kanban-view" class="content-section active">
-            <!-- Filter Bar -->
-            <div class="filter-bar">
+            <div class="kanban-toolbar">
+                <div id="kanban-filter-wrap" class="filter-bar filter-bar-collapsible">
+                    <button type="button" class="filter-bar-toggle" onclick="toggleFilterBar()">
+                        <span><i data-lucide="sliders-horizontal" style="width:14px;height:14px;display:inline;vertical-align:middle;margin-right:6px;"></i> Filters</span>
+                        <i data-lucide="chevron-down"></i>
+                    </button>
+                    <div class="filter-bar-body">
                 <div class="search-wrapper">
                     <i data-lucide="search"></i>
                     <input type="text" id="filter-search" class="input-field" placeholder="Search tasks..." oninput="loadTasks()">
@@ -2165,8 +211,13 @@
                 <button class="secondary-btn read-write-only" onclick="openLabelsManager()" title="Manage Project Labels">
                     <i data-lucide="tag"></i> Labels
                 </button>
+                    </div>
+                </div>
             </div>
 
+            <div id="kanban-status-tabs" class="kanban-status-tabs" aria-label="Kanban columns"></div>
+
+            <div id="board-scroll-wrapper" class="board-scroll-wrapper">
             <!-- Kanban board columns (Hidden for Viewers) -->
             <div class="board-container" id="kanban-board-container">
                 <!-- Backlog Column -->
@@ -2241,6 +292,7 @@
                     <div class="cards-list" ondragover="allowDrop(event)" ondrop="handleDrop(event)"></div>
                 </div>
             </div>
+            </div>
 
             <!-- Viewer-only List of Tasks (Visible only for Viewers) -->
             <div id="viewer-tasks-list-container" class="panel-table-card" style="display: none;">
@@ -2268,7 +320,7 @@
         <!-- DASHBOARD VIEW -->
         <section id="dashboard-view" class="content-section">
             <!-- KPI Cards Grid -->
-            <div class="kpi-grid">
+            <div class="kpi-grid five-cols">
                 <div class="kpi-card" onclick="viewAllTasksWithFilter('all')" title="View all tasks">
                     <div class="kpi-icon"><i data-lucide="check-square"></i></div>
                     <div class="kpi-data">
@@ -2283,6 +335,13 @@
                         <p>Completed Tasks</p>
                     </div>
                 </div>
+                <div class="kpi-card" title="Tasks completed this week">
+                    <div class="kpi-icon success"><i data-lucide="calendar-check"></i></div>
+                    <div class="kpi-data">
+                        <h4 id="kpi-week">0</h4>
+                        <p>Done This Week</p>
+                    </div>
+                </div>
                 <div class="kpi-card" onclick="viewAllTasksWithFilter('pending')" title="View pending tasks">
                     <div class="kpi-icon warning"><i data-lucide="clock"></i></div>
                     <div class="kpi-data">
@@ -2295,6 +354,16 @@
                     <div class="kpi-data">
                         <h4 id="kpi-overdue">0</h4>
                         <p>Overdue Tasks</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="kpi-grid" style="grid-template-columns: repeat(2, 1fr); margin-bottom: 20px;">
+                <div class="kpi-card" onclick="switchView('sprints')" title="View sprints">
+                    <div class="kpi-icon"><i data-lucide="zap"></i></div>
+                    <div class="kpi-data">
+                        <h4 id="sprint-velocity-kpi">—</h4>
+                        <p>Sprint Velocity <span id="sprint-velocity-name" style="font-size:11px;color:var(--text-muted);">per week</span></p>
                     </div>
                 </div>
             </div>
@@ -2317,6 +386,12 @@
                     <h3><i data-lucide="user-check"></i> Team Active Workload</h3>
                     <div class="chart-container">
                         <canvas id="chart-workload"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card full-width">
+                    <h3><i data-lucide="percent"></i> Developer Completion Rate</h3>
+                    <div class="chart-container">
+                        <canvas id="chart-dev-completion"></canvas>
                     </div>
                 </div>
             </div>
@@ -2402,6 +477,16 @@
 
             <div id="bulk-action-bar" class="bulk-action-bar bulk-only">
                 <span class="bulk-count" id="bulk-selected-count">0 selected</span>
+                <select id="bulk-skill-filter" class="input-field filter-select bulk-only" onchange="filterBulkAssigneesBySkill()" title="Filter assignees by skill">
+                    <option value="">All skills</option>
+                    <option value="Backend">Backend</option>
+                    <option value="Frontend">Frontend</option>
+                    <option value="AI">AI</option>
+                    <option value="Embedded">Embedded</option>
+                    <option value="DevOps">DevOps</option>
+                    <option value="Database">Database</option>
+                    <option value="Testing">Testing</option>
+                </select>
                 <select id="bulk-assignee-select" class="input-field filter-select" style="min-width:140px;">
                     <option value="">Assign to...</option>
                 </select>
@@ -2428,6 +513,10 @@
                     <option value="">Move to project...</option>
                 </select>
                 <button class="secondary-btn" onclick="executeBulkAction('project')">Move</button>
+                <select id="bulk-sprint-select" class="input-field filter-select bulk-only">
+                    <option value="">Add to sprint...</option>
+                </select>
+                <button class="secondary-btn bulk-only" onclick="executeBulkAction('sprint')">Sprint</button>
                 <button class="secondary-btn" style="color:var(--error);" onclick="executeBulkAction('delete')"><i data-lucide="trash-2"></i> Delete</button>
             </div>
 
@@ -2467,6 +556,37 @@
                 <button class="pagination-btn" id="prev-page-btn" onclick="prevPage()"><i data-lucide="chevron-left"></i> Previous</button>
                 <span class="pagination-info" id="pagination-info">Page 1 of 1</span>
                 <button class="pagination-btn" id="next-page-btn" onclick="nextPage()">Next <i data-lucide="chevron-right"></i></button>
+            </div>
+        </section>
+
+        <!-- SPRINTS VIEW -->
+        <section id="sprints-view" class="content-section">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:12px;">
+                <p style="font-size:13px;color:var(--text-secondary);">Lightweight iterations — click a sprint for burndown. Right-click to edit.</p>
+                <button class="primary-btn sprint-manage-only" onclick="openSprintEditor()" style="display:none;">
+                    <i data-lucide="plus"></i> New Sprint
+                </button>
+            </div>
+            <div class="sprints-grid" id="sprints-grid"></div>
+            <div id="sprints-empty" class="all-tasks-empty" style="display:none;">
+                <i data-lucide="zap"></i>
+                <h3>No Sprints Yet</h3>
+                <p>Create a sprint to track iteration progress and velocity.</p>
+            </div>
+            <div id="sprint-detail-panel" class="sprint-detail-panel" style="display:none;">
+                <h3 id="sprint-detail-title">Sprint</h3>
+                <p style="font-size:13px;color:var(--text-muted);margin:6px 0;" id="sprint-detail-dates"></p>
+                <p style="font-size:13px;color:var(--text-secondary);" id="sprint-detail-goal"></p>
+                <div class="sprint-meta" style="margin-top:12px;">
+                    <span id="sprint-detail-stats"></span>
+                    <span>Velocity: <strong id="sprint-velocity-val">—</strong></span>
+                </div>
+                <div class="chart-card" style="margin-top:16px;border:none;padding:0;">
+                    <h3><i data-lucide="trending-down"></i> Burndown Chart</h3>
+                    <div class="chart-container" style="height:280px;">
+                        <canvas id="chart-sprint-burndown"></canvas>
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -2516,6 +636,10 @@
                             </select>
                         </div>
                     </div>
+                    <div class="form-group">
+                        <label>Skills (for assignment matching)</label>
+                        <div class="skill-checkbox-grid" id="new-user-skills"></div>
+                    </div>
                     <button type="submit" class="primary-btn">
                         <i data-lucide="user-plus"></i> Register User
                     </button>
@@ -2531,6 +655,7 @@
                                 <th>Full Name</th>
                                 <th>Username</th>
                                 <th>System Role</th>
+                                <th>Skills</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -2765,6 +890,12 @@
                         </select>
                     </div>
                     <div class="form-group">
+                        <label for="editor-sprint">Sprint</label>
+                        <select id="editor-sprint" class="input-field">
+                            <option value="">No sprint</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
                         <label>Associate Project Labels</label>
                         <div class="checkbox-grid" id="editor-labels-checkboxes">
                             <!-- Labels hydrated dynamically -->
@@ -2853,6 +984,79 @@
         </div>
     </div>
 
+    <!-- SPRINT EDITOR MODAL -->
+    <div id="sprint-editor-modal" class="modal-overlay">
+        <div class="modal-container">
+            <div class="modal-header">
+                <h3 id="sprint-editor-title">New Sprint</h3>
+                <button class="close-btn" onclick="closeModal('sprint-editor-modal')"><i data-lucide="x"></i></button>
+            </div>
+            <form id="sprint-editor-form" onsubmit="handleSaveSprint(event)">
+                <input type="hidden" id="sprint-editor-id">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="sprint-name-input">Sprint Name</label>
+                        <input type="text" id="sprint-name-input" class="input-field" placeholder="e.g. Sprint 12 — API hardening" required>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="sprint-start-input">Start Date</label>
+                            <input type="date" id="sprint-start-input" class="input-field" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="sprint-end-input">End Date</label>
+                            <input type="date" id="sprint-end-input" class="input-field" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="sprint-status-input">Status</label>
+                            <select id="sprint-status-input" class="input-field">
+                                <option value="Planned">Planned</option>
+                                <option value="Active">Active</option>
+                                <option value="Completed">Completed</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="sprint-project-select">Project (optional)</label>
+                            <select id="sprint-project-select" class="input-field">
+                                <option value="">All projects</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="sprint-goal-input">Sprint Goal</label>
+                        <textarea id="sprint-goal-input" class="input-field" placeholder="What should the team deliver this iteration?"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="secondary-btn" onclick="closeModal('sprint-editor-modal')">Cancel</button>
+                    <button type="submit" class="primary-btn"><i data-lucide="check"></i> Save Sprint</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- EDIT USER SKILLS MODAL -->
+    <div id="edit-skills-modal" class="modal-overlay">
+        <div class="modal-container">
+            <div class="modal-header">
+                <h3>Edit Skills — <span id="edit-skills-username"></span></h3>
+                <button class="close-btn" onclick="closeModal('edit-skills-modal')"><i data-lucide="x"></i></button>
+            </div>
+            <form onsubmit="handleSaveUserSkills(event)">
+                <input type="hidden" id="edit-skills-user-id">
+                <div class="modal-body">
+                    <div class="skill-checkbox-grid" id="edit-user-skills"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="secondary-btn" onclick="closeModal('edit-skills-modal')">Cancel</button>
+                    <button type="submit" class="primary-btn">Save Skills</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- PASSWORD RESET MODAL -->
     <div id="password-reset-modal" class="modal-overlay">
         <div class="modal-container">
@@ -2883,11 +1087,40 @@
         </div>
     </div>
 
+    <!-- Move task menu (touch / mobile) -->
+    <div id="move-task-menu" class="move-task-menu" onclick="if(event.target===this)closeMoveTaskMenu()">
+        <div class="move-task-sheet">
+            <h4>Move task to…</h4>
+            <div id="move-task-options"></div>
+            <button type="button" class="move-task-cancel" onclick="closeMoveTaskMenu()">Cancel</button>
+        </div>
+    </div>
+
     <!-- CLIENT LOGIC -->
     <script>
         // State Variables
         let currentUser = null;
-        let activeView = 'kanban';
+
+        const VIEW_PATHS = {
+            kanban: '/',
+            'all-tasks': '/all-tasks',
+            dashboard: '/dashboard',
+            calendar: '/calendar',
+            projects: '/projects',
+            sprints: '/sprints',
+            users: '/users',
+            backups: '/backups'
+        };
+
+        function pathToView(path) {
+            if (path === '/kanban') return 'kanban';
+            for (const [view, route] of Object.entries(VIEW_PATHS)) {
+                if (route === path) return view;
+            }
+            return 'kanban';
+        }
+
+        let activeView = pathToView(window.location.pathname);
         let tasksList = [];
         let teamMembers = [];
         let labelsList = [];
@@ -2902,6 +1135,12 @@
 
             lucide.createIcons();
             startLiveClock();
+
+            window.addEventListener('popstate', (event) => {
+                const view = event.state?.view || pathToView(window.location.pathname);
+                activeView = view;
+                switchView(view, false);
+            });
             
             // Validate Session
             await checkUserSession();
@@ -3041,11 +1280,10 @@
 
         function updateThemeIcon(theme) {
             const icon = document.getElementById('theme-icon');
-            if (theme === 'light') {
-                icon.setAttribute('data-lucide', 'moon');
-            } else {
-                icon.setAttribute('data-lucide', 'sun');
-            }
+            const mobileIcon = document.getElementById('mobile-theme-icon');
+            const nextIcon = theme === 'light' ? 'moon' : 'sun';
+            if (icon) icon.setAttribute('data-lucide', nextIcon);
+            if (mobileIcon) mobileIcon.setAttribute('data-lucide', nextIcon);
             lucide.createIcons();
         }
 
@@ -3190,7 +1428,7 @@
                 teamMembers = await apiFetch('/api/users');
                 labelsList = await apiFetch('/api/labels');
                 populateAssigneeDropdowns();
-                switchView(activeView);
+                switchView(activeView, false);
             } catch (err) {
                 console.error("Workspace initial data load failed", err);
             }
@@ -3258,8 +1496,15 @@
         }
 
         // SPA Navigation Views router
-        function switchView(viewName) {
+        function switchView(viewName, updateUrl = true) {
             activeView = viewName;
+
+            if (updateUrl && VIEW_PATHS[viewName]) {
+                const targetPath = VIEW_PATHS[viewName];
+                if (window.location.pathname !== targetPath) {
+                    history.pushState({ view: viewName }, '', targetPath);
+                }
+            }
             
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
             document.getElementById(`nav-${viewName}`).classList.add('active');
@@ -3301,6 +1546,10 @@
                 titleEl.textContent = 'Projects';
                 subtitleEl.textContent = 'Internal project workspaces for the team';
                 loadProjectsPanel();
+            } else if (viewName === 'sprints') {
+                titleEl.textContent = 'Sprints';
+                subtitleEl.textContent = 'Iterations, burndown, and team velocity';
+                loadSprintsPanel();
             }
         }
 
@@ -4547,6 +2796,8 @@
             }
         }
     </script>
+    <script src="/static/js/layout.js"></script>
     <script src="/static/js/upgrade.js"></script>
+    <script src="/static/js/phase2.js"></script>
 </body>
 </html>

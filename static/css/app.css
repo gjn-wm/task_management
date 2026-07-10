@@ -1,0 +1,19 @@
+/* All @import rules must come first (before any other CSS rules) */
+@import url('tokens.css');
+@import url('components.css');
+@import url('views.css');
+@import url('layout.css');
+@import url('kanban.css');
+@import url('upgrade.css');
+@import url('phase2.css');
+@import url('responsive.css');
+
+:root {
+    --sidebar-width: 260px;
+    --sidebar-collapsed-width: 72px;
+    --header-offset: 220px;
+    --kanban-column-width: 300px;
+    --bp-tablet: 768px;
+    --bp-desktop: 1024px;
+    --bp-mobile-sm: 480px;
+}

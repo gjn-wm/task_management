@@ -1,0 +1,423 @@
+/* Phase 3 + 4 — Unified responsive overrides */
+
+body {
+    overflow-x: clip;
+}
+
+/* Table horizontal scroll */
+.tasks-table-wrap,
+.panel-table-card > div[style*="overflow-x"],
+.viewer-task-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.tasks-bulk-table {
+    min-width: 720px;
+}
+
+.viewer-task-table {
+    min-width: 600px;
+}
+
+/* Dashboard KPI */
+.kpi-grid.five-cols {
+    grid-template-columns: repeat(5, 1fr);
+}
+
+@media (max-width: 1200px) {
+    .kpi-grid.five-cols {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+/* Tablet */
+@media (max-width: 1024px) {
+    :root {
+        --header-offset: 260px;
+        --kanban-column-width: 280px;
+    }
+
+    .dashboard-charts-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .chart-card.full-width {
+        grid-column: span 1;
+    }
+
+    .task-detail-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .kpi-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+    :root {
+        --header-offset: 300px;
+        --kanban-column-width: 100%;
+    }
+
+    body {
+        flex-direction: column;
+    }
+
+    .mobile-topbar {
+        display: flex;
+    }
+
+    aside {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: min(300px, 85vw);
+        height: 100vh;
+        z-index: 200;
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+        border-right: 1px solid var(--border-color);
+        flex-direction: column;
+        padding: 20px 16px;
+    }
+
+    aside.mobile-open {
+        transform: translateX(0);
+    }
+
+    aside nav {
+        flex-direction: column;
+        overflow-x: visible;
+        overflow-y: auto;
+        margin: 0;
+        padding-bottom: 0;
+    }
+
+    aside .nav-item {
+        white-space: normal;
+        min-height: 44px;
+    }
+
+    aside .sidebar-footer {
+        flex-direction: column;
+        border-left: none;
+        border-top: 1px solid var(--border-color);
+        padding-top: 16px;
+        padding-left: 0;
+    }
+
+    aside .user-badge {
+        display: flex;
+    }
+
+    .sidebar-collapse-btn {
+        display: none !important;
+    }
+
+    main {
+        margin-left: 0 !important;
+        width: 100% !important;
+        padding: 12px 12px 20px;
+        min-height: calc(100vh - 56px);
+    }
+
+    body.sidebar-collapsed main {
+        margin-left: 0 !important;
+        width: 100% !important;
+    }
+
+    header {
+        flex-direction: column;
+        align-items: stretch;
+        margin-bottom: 12px;
+        gap: 10px;
+        padding-bottom: 0;
+        border-bottom: none;
+    }
+
+    .page-title h2 {
+        font-size: 18px;
+        line-height: 1.3;
+    }
+
+    #view-subtitle {
+        display: none;
+    }
+
+    .header-actions {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 8px;
+        align-items: center;
+    }
+
+    .header-clock {
+        display: none;
+    }
+
+    .header-actions .icon-btn,
+    .header-actions .notification-bell-wrap .icon-btn {
+        width: 44px;
+        height: 44px;
+        justify-content: center;
+    }
+
+    #create-task-btn {
+        grid-column: 1 / -1;
+        width: 100%;
+        min-height: 44px;
+        justify-content: center;
+    }
+
+    #create-task-btn .btn-label {
+        display: inline;
+    }
+
+    .filter-bar-toggle {
+        display: flex;
+    }
+
+    .filter-bar-collapsible.collapsed .filter-bar-body {
+        display: none;
+    }
+
+    .filter-bar {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 12px;
+        margin-bottom: 12px;
+    }
+
+    .filter-bar-body {
+        flex-direction: column;
+    }
+
+    .search-wrapper,
+    .filter-select,
+    .secondary-btn,
+    .view-toggle-group {
+        width: 100%;
+    }
+
+    .filter-select {
+        width: 100% !important;
+        min-height: 44px;
+    }
+
+    .input-field {
+        min-height: 44px;
+        font-size: 16px;
+    }
+
+    .view-toggle-group {
+        justify-content: stretch;
+    }
+
+    .view-toggle-btn {
+        flex: 1;
+        justify-content: center;
+        min-height: 44px;
+    }
+
+    .form-row {
+        grid-template-columns: 1fr;
+    }
+
+    /* Mobile kanban: single column + tabs */
+    .kanban-toolbar {
+        margin-bottom: 0;
+    }
+
+    .kanban-status-tabs {
+        display: flex;
+        padding-bottom: 8px;
+    }
+
+    .board-scroll-wrapper::before,
+    .board-scroll-wrapper::after {
+        display: none;
+    }
+
+    .board-container {
+        overflow-x: hidden;
+        scroll-snap-type: none;
+        padding-bottom: 8px;
+    }
+
+    .board-column {
+        display: none;
+        flex: 1 1 100%;
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+        max-height: calc(100dvh - var(--header-offset));
+        min-height: 240px;
+    }
+
+    .board-column.mobile-active {
+        display: flex;
+    }
+
+    .task-card .card-move-btn {
+        display: flex;
+    }
+
+    .task-card {
+        cursor: pointer;
+    }
+
+    .modal-container {
+        max-width: 100%;
+        max-height: 100dvh;
+        border-radius: 0;
+        margin: 0;
+    }
+
+    .modal-overlay {
+        padding: 0;
+        align-items: stretch;
+    }
+
+    .modal-container.large {
+        max-width: 100%;
+    }
+
+    .all-tasks-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .bulk-action-bar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .bulk-action-bar .input-field,
+    .bulk-action-bar .secondary-btn {
+        width: 100%;
+    }
+
+    .sprint-charts-row {
+        grid-template-columns: 1fr;
+    }
+
+    .projects-grid,
+    .sprints-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .calendar-grid {
+        font-size: 11px;
+    }
+
+    .calendar-day-cell {
+        min-height: 72px;
+        padding: 4px;
+    }
+
+    .kpi-grid.five-cols {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .chart-card {
+        min-height: 220px;
+    }
+
+    .panel-table-card {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+}
+
+@media (max-width: 480px) {
+    main {
+        padding: 10px 10px 16px;
+    }
+
+    .page-title h2 {
+        font-size: 17px;
+    }
+
+    .header-actions {
+        grid-template-columns: auto 1fr;
+    }
+
+    #create-task-btn .btn-label {
+        display: none;
+    }
+
+    #create-task-btn {
+        grid-column: auto;
+        width: 44px;
+        min-width: 44px;
+        padding: 0;
+    }
+
+    .task-card {
+        padding: 12px;
+    }
+
+    .card-title {
+        font-size: 13px;
+    }
+
+    .kpi-grid,
+    .kpi-grid.five-cols {
+        grid-template-columns: 1fr;
+    }
+
+    .toast {
+        min-width: auto;
+        max-width: calc(100vw - 48px);
+    }
+
+    .toast-container {
+        left: 16px;
+        right: 16px;
+        bottom: 16px;
+    }
+
+    .kanban-status-tab {
+        font-size: 11px;
+        padding: 8px 12px;
+    }
+}
+
+/* Full-screen modals on small phones */
+@media (max-width: 576px) {
+    .modal-overlay.active {
+        padding: 0;
+    }
+
+    .modal-container {
+        border-radius: 0;
+        min-height: 100vh;
+        max-height: 100vh;
+    }
+}
+
+/* Touch devices: reduce hover lift */
+@media (hover: none) {
+    .task-card:hover {
+        transform: none;
+    }
+
+    .kpi-card:hover {
+        transform: none;
+    }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    .board-container {
+        scroll-behavior: auto;
+    }
+
+    aside {
+        transition: none;
+    }
+}

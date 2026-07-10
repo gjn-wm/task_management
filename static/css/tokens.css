@@ -1,0 +1,51 @@
+:root {
+            /* Color Schema */
+            --bg-primary: #080b12;         /* Deep obsidian black */
+            --bg-secondary: #0f1420;       /* Rich dark slate for navigation and blocks */
+            --bg-tertiary: #171d2d;        /* Muted slate for controls and sub-elements */
+            --bg-card: #131926;            /* Unified card background */
+            --text-primary: #f8fafc;       /* Bright white for text readability */
+            --text-secondary: #94a3b8;     /* Warm gray for descriptions */
+            --text-muted: #64748b;         /* Cool gray for timestamps and borders */
+            --border-color: #20283c;       /* Subtle slate border lines */
+            
+            /* Traffic Signal Colors */
+            --signal-green: #0d9488;       /* Lake Teal (Green Signal) */
+            --signal-amber: #d97706;       /* Amber Warning (Yellow Signal) */
+            --signal-red: #e11d48;         /* Crimson (Red Signal) */
+            --accent-color: #14b8a6;       /* System Teal theme accent */
+            --accent-hover: #0f9688;
+            --info: #0ea5e9;               /* Teal Blue */
+            
+            --glass-bg: rgba(15, 20, 32, 0.85);
+            --glass-border: rgba(255, 255, 255, 0.05);
+            --card-shadow: 0 12px 24px -4px rgba(0, 0, 0, 0.5), 0 4px 12px -2px rgba(0, 0, 0, 0.3);
+            --glow-color: rgba(20, 184, 166, 0.1);
+            
+            --success: var(--signal-green);
+            --warning: var(--signal-amber);
+            --error: var(--signal-red);
+        }
+
+        [data-theme="light"] {
+            --bg-primary: #f1f5f9;         /* Light slate grey background */
+            --bg-secondary: #ffffff;       /* Pure white container backgrounds */
+            --bg-tertiary: #e2e8f0;        /* Cool light gray elements */
+            --bg-card: #ffffff;            /* White task cards */
+            --text-primary: #0f172a;       /* Slate dark primary text */
+            --text-secondary: #475569;     /* Charcoal gray secondary text */
+            --text-muted: #94a3b8;         /* Light gray placeholder/border */
+            --border-color: #cbd5e1;       /* Light border */
+            
+            --signal-green: #0f766e;       /* Deep Lake Teal */
+            --signal-amber: #b45309;       /* Dark Amber warning color */
+            --signal-red: #be123c;         /* Dark stop crimson */
+            --accent-color: #0f766e;
+            --accent-hover: #115e59;
+            --info: #0284c7;
+            
+            --glass-bg: rgba(255, 255, 255, 0.85);
+            --glass-border: rgba(0, 0, 0, 0.08);
+            --card-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.03);
+            --glow-color: rgba(15, 118, 110, 0.05);
+        }
