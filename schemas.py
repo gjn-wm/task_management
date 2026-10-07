@@ -234,3 +234,16 @@ class ActivityLogResponse(BaseModel):
     task_id: Optional[int] = None
     class Config:
         from_attributes = True
+
+class TimeTestRequest(BaseModel):
+    use_today: bool
+    target_date: Optional[str] = None  # Expected format YYYY-MM-DD
+    target_time: str                   # Expected format HH:MM
+    wait_time_sec: int
+    # Which biometric machine to run against: "zk" or "rs9n".
+    # Defaults to "zk" so existing callers keep working unchanged.
+    machine: str = "zk"
+
+class VoiceTestRequest(BaseModel):
+    index: int = 0
+

@@ -105,6 +105,9 @@
             <div class="nav-item admin-only" onclick="switchView('backups')" id="nav-backups" style="display: none;">
                 <i data-lucide="database"></i> System Backups
             </div>
+            <div class="nav-item admin-only" onclick="switchView('test-time')" id="nav-test-time" style="display: none;">
+                <i data-lucide="clock"></i> Time Test
+            </div>
         </nav>
 
         <div class="sidebar-footer">
@@ -698,6 +701,76 @@
                 </div>
             </div>
         </section>
+
+        <!-- TEST TIME VIEW (Admin Only) -->
+        <section id="test-time-view" class="content-section">
+            <div class="panel-table-card">
+                <h3>Time Test Configuration</h3>
+                <p style="font-size: 13px; color: var(--text-secondary);">Set a new time on the machine, wait, and restore. Only admins can use this feature.</p>
+                <div style="max-width: 500px; margin-top: 20px;">
+                    <!-- Which machine to run the test against -->
+                    <div class="form-group">
+                        <label>Machine</label>
+                        <div class="tabs-header" style="margin-bottom: 8px;">
+                            <button type="button" class="tab-btn active" id="test-time-machine-zk"
+                                    onclick="setTestTimeMachine('zk')">ZKTeco</button>
+                            <button type="button" class="tab-btn" id="test-time-machine-rs9n"
+                                    onclick="setTestTimeMachine('rs9n')">Realtime RS9N</button>
+                        </div>
+                        <p id="test-time-machine-note" style="font-size: 12px; color: var(--text-secondary); margin: 0;">
+                            Connects directly to the ZKTeco machine.
+                        </p>
+                    </div>
+                    <div class="form-group" style="margin-top: 15px;">
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="test-time-use-today" checked onchange="toggleTestTimeDateInput()">
+                            <span>Use Today's Date</span>
+                        </label>
+                    </div>
+                    <div class="form-group" id="test-time-date-group" style="display: none; margin-top: 15px;">
+                        <label>Target Date</label>
+                        <input type="text" id="test-time-target-date" class="input-field" placeholder="YYYY-MM-DD" pattern="[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])">
+                    </div>
+                    <div class="form-group" style="margin-top: 15px;">
+                        <label>Target Time</label>
+                        <div style="display: flex; gap: 8px;">
+                            <select id="test-time-hh" class="input-field" style="min-width: 0; padding: 0 8px; text-align: center;"></select>
+                            <span style="display: flex; align-items: center; font-weight: bold;">:</span>
+                            <select id="test-time-mm" class="input-field" style="min-width: 0; padding: 0 8px; text-align: center;"></select>
+                            <span style="display: flex; align-items: center; font-weight: bold;">:</span>
+                            <select id="test-time-ss" class="input-field" style="min-width: 0; padding: 0 8px; text-align: center;"></select>
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-top: 15px;">
+                        <label>Wait Time (seconds)</label>
+                        <input type="number" id="test-time-wait-time" class="input-field" value="30" required>
+                    </div>
+                    <button class="primary-btn" onclick="submitTestTime()" style="margin-top: 20px;">
+                        <i data-lucide="play-circle"></i> Run Time Test
+                    </button>
+                    <div id="test-time-result" style="margin-top: 15px; font-weight: bold; font-size: 14px; white-space: pre-wrap; font-family: monospace; background: var(--bg-color); padding: 10px; border-radius: 4px; display: none;"></div>
+                </div>
+            </div>
+
+            <div class="panel-table-card" style="margin-top: 25px;">
+                <h3>Voice Prompt Test</h3>
+                <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 20px;">Test the biometric device speaker by triggering internal voice prompts.</p>
+                <div style="max-width: 500px;">
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
+                        <button class="secondary-btn" onclick="testVoice(0)" style="justify-content: center; font-size: 16px; font-weight: bold; padding: 12px;">0</button>
+                        <button class="secondary-btn" onclick="testVoice(1)" style="justify-content: center; font-size: 16px; font-weight: bold; padding: 12px;">1</button>
+                        <button class="secondary-btn" onclick="testVoice(2)" style="justify-content: center; font-size: 16px; font-weight: bold; padding: 12px;">2</button>
+                        <button class="secondary-btn" onclick="testVoice(3)" style="justify-content: center; font-size: 16px; font-weight: bold; padding: 12px;">3</button>
+                        <button class="secondary-btn" onclick="testVoice(4)" style="justify-content: center; font-size: 16px; font-weight: bold; padding: 12px;">4</button>
+                        <button class="secondary-btn" onclick="testVoice(5)" style="justify-content: center; font-size: 16px; font-weight: bold; padding: 12px;">5</button>
+                        <button class="secondary-btn" onclick="testVoice(6)" style="justify-content: center; font-size: 16px; font-weight: bold; padding: 12px;">6</button>
+                        <button class="secondary-btn" onclick="testVoice(7)" style="justify-content: center; font-size: 16px; font-weight: bold; padding: 12px;">7</button>
+                        <button class="secondary-btn" onclick="testVoice(8)" style="justify-content: center; font-size: 16px; font-weight: bold; padding: 12px;">8</button>
+                    </div>
+                    <div id="test-voice-result" style="margin-top: 15px; font-weight: bold; font-size: 14px; white-space: pre-wrap; font-family: monospace; background: var(--bg-color); padding: 10px; border-radius: 4px; display: none;"></div>
+                </div>
+            </div>
+        </section>
     </main>
 
     <!-- TASK DETAIL MODAL -->
@@ -1109,7 +1182,8 @@
             projects: '/projects',
             sprints: '/sprints',
             users: '/users',
-            backups: '/backups'
+            backups: '/backups',
+            'test-time': '/test-time'
         };
 
         function pathToView(path) {
@@ -1535,13 +1609,16 @@
                 subtitleEl.textContent = 'Track due dates on a monthly calendar';
                 renderCalendar();
             } else if (viewName === 'users') {
-                titleEl.textContent = 'Team Management';
-                subtitleEl.textContent = 'Register and edit project roles';
+                titleEl.textContent = 'Team Members';
+                subtitleEl.textContent = 'Manage users and system roles';
                 loadUsersPanel();
             } else if (viewName === 'backups') {
-                titleEl.textContent = 'Backups Manager';
-                subtitleEl.textContent = 'Download, generate, and manage SQLite files';
+                titleEl.textContent = 'System Backups';
+                subtitleEl.textContent = 'Manage database backup files';
                 loadBackupsPanel();
+            } else if (viewName === 'test-time') {
+                titleEl.textContent = 'Time Test';
+                subtitleEl.textContent = 'Set and test machine time';
             } else if (viewName === 'projects') {
                 titleEl.textContent = 'Projects';
                 subtitleEl.textContent = 'Internal project workspaces for the team';
@@ -1551,6 +1628,8 @@
                 subtitleEl.textContent = 'Iterations, burndown, and team velocity';
                 loadSprintsPanel();
             }
+
+            lucide.createIcons();
         }
 
         async function loadTasks() {
@@ -1915,6 +1994,7 @@
 
         async function handleDrop(e) {
             e.preventDefault();
+            e.stopPropagation();
             const taskId = e.dataTransfer.getData('text/plain');
             const targetColumn = e.currentTarget.closest('.board-column');
             const newStatus = targetColumn.getAttribute('data-status');
@@ -2785,14 +2865,213 @@
         }
 
         async function deleteBackup(filename) {
-            if (confirm(`Delete the backup file "${filename}" permanently?`)) {
-                try {
-                    await apiFetch(`/api/backups/${filename}`, { method: 'DELETE' });
-                    showToast("Backup file deleted", "success");
+            if (!confirm(`Are you sure you want to delete backup '${filename}'?`)) return;
+            try {
+                const res = await fetch(`/api/backups/${filename}`, { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('Backup deleted successfully', 'success');
                     loadBackupsPanel();
-                } catch (err) {
-                    console.error(err);
+                } else {
+                    const data = await res.json();
+                    showToast(data.detail || 'Failed to delete backup', 'error');
                 }
+            } catch (error) {
+                console.error("Failed to delete backup", error);
+                showToast("Connection error deleting backup", "error");
+            }
+        }
+
+        // --- TIME TEST FUNCTIONS ---
+        document.addEventListener('DOMContentLoaded', () => {
+            const hh = document.getElementById('test-time-hh');
+            const mm = document.getElementById('test-time-mm');
+            const ss = document.getElementById('test-time-ss');
+            if (hh && mm && ss) {
+                for (let i = 0; i < 24; i++) {
+                    let val = i.toString().padStart(2, '0');
+                    hh.options.add(new Option(val, val));
+                }
+                for (let i = 0; i < 60; i++) {
+                    let val = i.toString().padStart(2, '0');
+                    mm.options.add(new Option(val, val));
+                    ss.options.add(new Option(val, val));
+                }
+            }
+        });
+
+        function toggleTestTimeDateInput() {
+            const useToday = document.getElementById('test-time-use-today').checked;
+            document.getElementById('test-time-date-group').style.display = useToday ? 'none' : 'block';
+        }
+
+        // Which machine the time test runs against. 'zk' keeps the previous behaviour.
+        window.testTimeMachine = 'zk';
+
+        function setTestTimeMachine(machine) {
+            window.testTimeMachine = machine;
+            ['zk', 'rs9n'].forEach(m => {
+                const btn = document.getElementById('test-time-machine-' + m);
+                if (btn) btn.classList.toggle('active', m === machine);
+            });
+            const note = document.getElementById('test-time-machine-note');
+            if (note) {
+                // The RS9N is a push device: the change is queued and applied on its
+                // next poll, so it is worth telling the user before they wait.
+                note.textContent = (machine === 'rs9n')
+                    ? 'Queued via the RS9N clock service; the device applies it on its next poll (a few seconds). That service must be running.'
+                    : 'Connects directly to the ZKTeco machine.';
+            }
+        }
+
+        async function submitTestTime() {
+            const useToday = document.getElementById('test-time-use-today').checked;
+            const targetDate = document.getElementById('test-time-target-date').value;
+            const hVal = document.getElementById('test-time-hh').value;
+            const mVal = document.getElementById('test-time-mm').value;
+            const sVal = document.getElementById('test-time-ss').value;
+            const targetTime = `${hVal}:${mVal}:${sVal}`;
+            const waitTime = parseInt(document.getElementById('test-time-wait-time').value, 10);
+            
+            if (!useToday && !targetDate) {
+                alert("Please select a target date");
+                return;
+            }
+            if (!useToday && !/^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])$/.test(targetDate)) {
+                alert("Please enter a valid target date (YYYY-MM-DD)");
+                return;
+            }
+            
+            const payload = {
+                use_today: useToday,
+                target_date: useToday ? null : targetDate,
+                target_time: targetTime,
+                wait_time_sec: waitTime || 30,
+                machine: window.testTimeMachine || 'zk'
+            };
+            
+            const resultEl = document.getElementById('test-time-result');
+            resultEl.style.display = 'block';
+            resultEl.textContent = "Starting time test... Check backend console for progress.";
+            resultEl.style.color = "var(--primary-color)";
+            
+            // Clear previous interval if exists
+            if (window.testTimeInterval) {
+                clearInterval(window.testTimeInterval);
+            }
+            
+            try {
+                const res = await fetch('/api/admin/test-time', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    resultEl.textContent = "Task initiated. Waiting for logs...";
+                    resultEl.style.color = "var(--text-color)";
+                    
+                    const taskId = data.task_id;
+                    window.testTimeInterval = setInterval(async () => {
+                        try {
+                            const logRes = await fetch(`/api/admin/test-time/logs/${taskId}`);
+                            if (logRes.ok) {
+                                const logData = await logRes.json();
+                                if (logData.logs && logData.logs.length > 0) {
+                                    resultEl.innerHTML = '';
+                                    resultEl.style.background = 'var(--bg-secondary)';
+                                    resultEl.style.padding = '16px';
+                                    resultEl.style.borderRadius = '8px';
+                                    resultEl.style.border = '1px solid var(--border-color)';
+                                    
+                                    const logList = document.createElement('div');
+                                    logList.style.display = 'flex';
+                                    logList.style.flexDirection = 'column';
+                                    logList.style.gap = '14px'; // Proper spacing
+                                    
+                                    logData.logs.forEach(log => {
+                                        const stepRow = document.createElement('div');
+                                        stepRow.style.display = 'flex';
+                                        stepRow.style.alignItems = 'flex-start';
+                                        stepRow.style.gap = '12px';
+                                        
+                                        let msgText = typeof log === 'object' ? log.message : log;
+                                        let logStatus = typeof log === 'object' ? log.status : 'info';
+                                        let logTime = typeof log === 'object' ? log.time : new Date().toLocaleTimeString();
+
+                                        let iconHtml = '<div style="width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:var(--primary-color); color:white; font-weight:bold; font-size:12px; flex-shrink:0;">⌛</div>';
+                                        if (logStatus === 'success' || msgText.includes("restored successfully")) {
+                                            iconHtml = '<div style="width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:var(--success-color); color:white; font-weight:bold; font-size:12px; flex-shrink:0;">✓</div>';
+                                        } else if (logStatus === 'error' || msgText.includes("Error:")) {
+                                            iconHtml = '<div style="width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:var(--danger-color); color:white; font-weight:bold; font-size:14px; flex-shrink:0;">!</div>';
+                                        }
+                                        
+                                        stepRow.innerHTML = `
+                                            ${iconHtml}
+                                            <div style="flex: 1; padding-top: 2px;">
+                                                <div style="font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px;">${msgText}</div>
+                                                <div style="font-size: 11px; color: var(--text-secondary); letter-spacing: 0.5px;">${logTime}</div>
+                                            </div>
+                                        `;
+                                        logList.appendChild(stepRow);
+                                    });
+                                    resultEl.appendChild(logList);
+                                    
+                                    // Stop polling if done or error
+                                    const lastLog = logData.logs[logData.logs.length - 1];
+                                    const lastMsg = typeof lastLog === 'object' ? lastLog.message : lastLog;
+                                    const lastStatus = typeof lastLog === 'object' ? lastLog.status : '';
+                                    
+                                    if (lastStatus === 'error' || lastMsg.includes("restored successfully") || lastMsg.includes("Error:")) {
+                                        clearInterval(window.testTimeInterval);
+                                    }
+                                }
+                            } else {
+                                // Task not found or server error (e.g. server restarted)
+                                clearInterval(window.testTimeInterval);
+                                if (logRes.status === 404) {
+                                    resultEl.textContent = "Logs no longer available. (Did the server restart?)";
+                                }
+                            }
+                        } catch (err) {
+                            console.error("Error fetching logs", err);
+                            // Also clear interval on hard network failures
+                            clearInterval(window.testTimeInterval);
+                        }
+                    }, 1000);
+                    
+                } else {
+                    resultEl.textContent = "Error: " + (data.detail || "Failed");
+                    resultEl.style.color = "var(--danger-color)";
+                }
+            } catch (err) {
+                resultEl.textContent = "Error: " + err.message;
+                resultEl.style.color = "var(--danger-color)";
+            }
+        }
+
+        async function testVoice(index) {
+            const resultEl = document.getElementById('test-voice-result');
+            resultEl.style.display = 'block';
+            resultEl.textContent = `Triggering voice prompt ${index}...`;
+            resultEl.style.color = "var(--primary-color)";
+
+            try {
+                const res = await fetch('/api/admin/test-voice', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ index: index })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    resultEl.textContent = `Voice test ${index} played successfully!`;
+                    resultEl.style.color = "#10b981";
+                } else {
+                    resultEl.textContent = `Error: ${data.detail || "Failed to trigger voice prompt"}`;
+                    resultEl.style.color = "var(--danger-color)";
+                }
+            } catch (e) {
+                resultEl.textContent = `Network Error: ${e.message}`;
+                resultEl.style.color = "var(--danger-color)";
             }
         }
     </script>

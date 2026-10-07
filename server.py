@@ -2,11 +2,118 @@ import os
 import shutil
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
-from fastapi import FastAPI, Depends, HTTPException, status, Response, Request, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, status, Response, Request, UploadFile, File, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+
+import time
+import uuid
+import json
+import urllib.request
+import urllib.error
+from bio.zk_tool import Managed, op_set_time, op_test_voice
+
+TIME_TEST_LOGS = {}
+
+def _load_dotenv(path: str = ".env"):
+    """Populate os.environ from a .env file, if one exists.
+
+    Hand-rolled rather than using python-dotenv so this adds no dependency.
+    Real environment variables always win, so deployment settings are never
+    silently overridden by a stale local file.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key, value = key.strip(), value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except FileNotFoundError:
+        pass
+
+
+_load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
+# --- Realtime RS9N / S362 biometric machine -------------------------------
+# The RS9N cannot be dialled directly the way a ZKTeco can: it is a PUSH device
+# that only ever talks to whichever server owns its /fk endpoint. So this app
+# reaches it through the attendance API over HTTP — that service owns the device
+# connection and queues the time change for the device to collect on its next
+# poll (a few seconds). It must be running for machine="rs9n" to work.
+#
+# Configure both in .env (gitignored):
+#   RS9N_API_BASE=http://127.0.0.1:5004
+#   RS9N_API_TOKEN=<the API_SECRET_TOKEN of the attendance API>
+RS9N_API_BASE = os.getenv("RS9N_API_BASE", "http://127.0.0.1:5004").rstrip("/")
+RS9N_API_TOKEN = os.getenv("RS9N_API_TOKEN", "")
+
+
+def rs9n_call(method: str, path: str, payload: dict = None, timeout: int = 120):
+    """Call the attendance API. Raises RuntimeError with a readable message.
+
+    Uses urllib rather than requests/httpx so this adds no new dependency.
+    Blocking is fine: every caller here is already a background task.
+    """
+    # Every RS9N endpoint is bearer-protected. Say so plainly rather than letting
+    # it surface as an opaque 401 from the service.
+    if not RS9N_API_TOKEN:
+        raise RuntimeError(
+            "RS9N_API_TOKEN is not configured. Add it to the .env file next to "
+            "server.py (it must match the API_SECRET_TOKEN of the attendance API), "
+            "then restart this server."
+        )
+
+    url = RS9N_API_BASE + path
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(url, data=body, method=method)
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Authorization", "Bearer " + RS9N_API_TOKEN)
+    # Cloudflare in front of the attendance API rejects urllib's default
+    # "Python-urllib/x.y" User-Agent with a 403 (error 1010) before the request
+    # ever reaches the service, so identify ourselves explicitly.
+    req.add_header("User-Agent", "Task_itms/1.0 (+rs9n-time-test)")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            err_body = ""
+        # Cloudflare blocks come back as a plain-text "error code: NNNN" body
+        # with Server: cloudflare. Don't misreport those as a bad token.
+        if (e.headers.get("Server", "").lower() == "cloudflare"
+                and err_body.strip().startswith("error code:")):
+            raise RuntimeError(
+                f"Cloudflare blocked the request to the attendance API at "
+                f"{RS9N_API_BASE} (HTTP {e.code}, {err_body.strip()}). "
+                "The request never reached the service; check the Cloudflare "
+                "firewall / Browser Integrity Check rules for this server.")
+        # The attendance API returns a JSON envelope with a useful message;
+        # surface that rather than a bare "HTTP 503".
+        detail = ""
+        try:
+            detail = json.loads(err_body).get("message", "")
+        except Exception:
+            pass
+        if e.code in (401, 403):
+            raise RuntimeError(
+                "The attendance API rejected our token (HTTP %d). RS9N_API_TOKEN "
+                "in .env must match the API_SECRET_TOKEN that service runs with."
+                % e.code)
+        raise RuntimeError(detail or f"Attendance API returned HTTP {e.code}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(
+            f"Could not reach the attendance API at {RS9N_API_BASE} ({e.reason}). "
+            "Start attendance_api.py, or set the RS9N_API_BASE environment variable."
+        )
 
 import models
 import schemas
@@ -22,8 +129,12 @@ os.makedirs("backups", exist_ok=True)
 Base.metadata.create_all(bind=engine)
 run_upgrade()
 
-app = FastAPI(title="Task Management API")
-
+app = FastAPI(
+    title="Task Management API",    
+    docs_url=None,       # Disables /docs
+    redoc_url=None,      # Disables /redoc
+    openapi_url=None 
+    )
 # Configure CORS for local development if needed
 app.add_middleware(
     CORSMiddleware,
@@ -76,6 +187,10 @@ def create_initial_admin():
         print(f"Startup error: {e}")
     finally:
         db.close()
+
+@app.api_route("/health", methods=["GET", "HEAD"])
+def health_check():
+    return {"status": "ok"}
 
 # Log activities helper
 def log_activity(db: Session, user_id: int, action: str, details: str, task_id: Optional[int] = None):
@@ -1286,6 +1401,203 @@ def delete_backup(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete backup: {str(e)}")
 
+def perform_time_test(task_id: str, target_dt: datetime, wait_time_sec: int,
+                      machine: str = "zk"):
+    """Background task: set the machine clock, wait, then restore it.
+
+    Dispatches on `machine`. Both paths emit the same log steps
+    (connect / set / wait / restore / error) so the frontend renders them
+    identically regardless of which machine ran.
+    """
+    def add_log(step: str, msg: str, status: str = "info"):
+        print(f"[Background Task] {msg}")
+        if task_id in TIME_TEST_LOGS:
+            TIME_TEST_LOGS[task_id].append({
+                "step": step,
+                "message": msg,
+                "status": status,
+                "time": datetime.now().strftime("%H:%M:%S")
+            })
+
+    if machine == "rs9n":
+        return _perform_time_test_rs9n(add_log, target_dt, wait_time_sec)
+    return _perform_time_test_zk(add_log, target_dt, wait_time_sec)
+
+
+def _perform_time_test_rs9n(add_log, target_dt: datetime, wait_time_sec: int):
+    """Time test against the Realtime RS9N / S362, via the attendance API.
+
+    Differs from the ZK path in one way that matters: SET_TIME is QUEUED, not
+    applied instantly — the device collects it on its next poll. The clock
+    service waits for the device to confirm, so each call takes a few seconds.
+    Those seconds are measured and folded into the restore value; otherwise the
+    device would come back from the test running that much slow.
+    """
+    add_log("connect", "Contacting attendance API...", "pending")
+    try:
+        clock = rs9n_call("GET", "/api/clock", timeout=30)
+    except RuntimeError as e:
+        add_log("error", str(e), "error")
+        return
+
+    info = clock.get("data") or {}
+    device_id = info.get("device_id", "?")
+    original_device_time = None
+    if info.get("device_time"):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+            try:
+                original_device_time = datetime.strptime(info["device_time"], fmt)
+                break
+            except ValueError:
+                continue
+
+    if original_device_time is None:
+        add_log("error", "The RS9N has not reported a usable clock yet — it may be "
+                         "offline. Cannot run the test without knowing its current time.",
+                "error")
+        return
+
+    add_log("connect", f"Connected to RS9N {device_id}. "
+                       f"Original device time: {original_device_time}", "success")
+
+    # Wall clock from here, so the restore accounts for real elapsed time.
+    started = datetime.now()
+
+    add_log("set", f"Setting device time to: {target_dt} (queued for next device poll)", "pending")
+    try:
+        res = rs9n_call("POST", "/api/set-time", {
+            "time": target_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "wait_seconds": 60,
+        })
+    except RuntimeError as e:
+        add_log("error", f"Failed to set time: {e}", "error")
+        return
+
+    if not res.get("confirmed"):
+        add_log("error", "The RS9N did not confirm the time change: "
+                         f"{res.get('message', 'no confirmation')}", "error")
+        return
+    add_log("set", "Time set successfully on the machine.", "success")
+
+    add_log("wait", f"Waiting for {wait_time_sec} seconds to let you test...", "pending")
+    time.sleep(wait_time_sec)
+    add_log("wait", "Wait time completed.", "success")
+
+    # Original time + everything that actually elapsed (queueing + wait).
+    elapsed = (datetime.now() - started).total_seconds()
+    restore_time = original_device_time + timedelta(seconds=elapsed)
+
+    add_log("restore", f"Restoring device time to: {restore_time}", "pending")
+    try:
+        res = rs9n_call("POST", "/api/set-time", {
+            "time": restore_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "wait_seconds": 60,
+        })
+    except RuntimeError as e:
+        add_log("error", f"Failed to restore time: {e}", "error")
+        return
+
+    if res.get("confirmed"):
+        add_log("restore", "Machine time restored successfully. Test complete!", "success")
+    else:
+        add_log("error", "The RS9N did not confirm the restore — check its clock "
+                         "before trusting new punches.", "error")
+
+
+def _perform_time_test_zk(add_log, target_dt: datetime, wait_time_sec: int):
+    """Time test against a ZKTeco machine (direct pyzk connection)."""
+    add_log("connect", "Connecting to biometric device...", "pending")
+    try:
+        with Managed() as conn:
+            original_device_time = conn.get_time()
+            add_log("connect", f"Connected. Original device time: {original_device_time}", "success")
+            
+            add_log("set", f"Setting device time to: {target_dt}", "pending")
+            op_set_time(conn, target_dt)
+            add_log("set", "Time set successfully on the machine.", "success")
+    except Exception as e:
+        add_log("error", f"Failed to connect or set time: {e}", "error")
+        return
+
+    add_log("wait", f"Waiting for {wait_time_sec} seconds to let you test...", "pending")
+    time.sleep(wait_time_sec)
+    add_log("wait", f"Wait time completed.", "success")
+    
+    # Calculate time to restore: original time + the time we waited
+    restore_time = original_device_time + timedelta(seconds=wait_time_sec)
+    
+    add_log("restore", f"Restoring device time to: {restore_time}", "pending")
+    try:
+        with Managed() as conn:
+            op_set_time(conn, restore_time)
+            add_log("restore", "Machine time restored successfully. Test complete!", "success")
+    except Exception as e:
+        add_log("error", f"Failed to restore time: {e}", "error")
+
+@app.post("/api/admin/test-time")
+def run_time_test(
+    req: schemas.TimeTestRequest,
+    background_tasks: BackgroundTasks,
+    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN, auth.ROLE_MANAGER]))
+):
+    machine = (req.machine or "zk").strip().lower()
+    if machine not in ("zk", "rs9n"):
+        raise HTTPException(status_code=400,
+                            detail=f"machine must be 'zk' or 'rs9n'. Received: '{req.machine}'")
+
+    if req.use_today:
+        target_date_str = datetime.now().date().strftime("%Y-%m-%d")
+    else:
+        if not req.target_date:
+            raise HTTPException(status_code=400, detail="target_date is required when use_today is false")
+        target_date_str = req.target_date
+
+    try:
+        try:
+            # Try parsing with seconds first
+            target_dt = datetime.strptime(f"{target_date_str} {req.target_time}", "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            # Fallback to no seconds for backward compatibility
+            target_dt = datetime.strptime(f"{target_date_str} {req.target_time}", "%Y-%m-%d %H:%M")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date or time format. Details: {e}")
+
+    task_id = str(uuid.uuid4())
+    TIME_TEST_LOGS[task_id] = []
+
+    # Add the test process to background tasks
+    background_tasks.add_task(perform_time_test, task_id, target_dt, req.wait_time_sec, machine)
+
+    return {
+        "status": "success",
+        "task_id": task_id,
+        "machine": machine,
+        "message": f"Time test initiated on '{machine}'. Setting time to {target_dt}, "
+                   f"waiting {req.wait_time_sec}s, then restoring.",
+        "note": "Check the server console for live progress."
+    }
+
+@app.get("/api/admin/test-time/logs/{task_id}")
+def get_time_test_logs(
+    task_id: str,
+    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN, auth.ROLE_MANAGER]))
+):
+    if task_id not in TIME_TEST_LOGS:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"logs": TIME_TEST_LOGS[task_id]}
+
+@app.post("/api/admin/test-voice")
+def run_voice_test(
+    req: schemas.VoiceTestRequest,
+    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN, auth.ROLE_MANAGER]))
+):
+    try:
+        with Managed() as conn:
+            result = op_test_voice(conn, req.index)
+            return result
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to play voice: {e}")
+
 # --- Serve Static Frontend ---
 def _spa_index():
     if os.path.exists("static/index.html"):
@@ -1332,6 +1644,10 @@ def spa_users():
 def spa_backups():
     return _spa_index()
 
+@app.get("/test-time")
+def spa_test_time():
+    return _spa_index()
+
 # Mount static files (PWA support, manifest, service worker)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
@@ -1348,7 +1664,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "server:app",
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=5001,
         reload=False,
     )
