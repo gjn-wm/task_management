@@ -35,9 +35,19 @@ There is no test suite, linter or build step. Frontend assets are served as-is f
 
 **Dates:** `Task.due_date`, `Sprint.start_date` and `Sprint.end_date` are **strings** (`YYYY-MM-DD`), not Date columns. Timestamps are naive UTC (`datetime.utcnow`).
 
-**Biometric clock "time test" (`/api/admin/test-time`, `/test-time` view):** this sets an attendance machine's clock to a target time, waits, then restores it. It runs as a FastAPI `BackgroundTask`, with progress kept in the in-memory `TIME_TEST_LOGS` dict that the frontend polls. There are two backends:
+**Biometric clock "time test" (`/api/admin/test-time`, `/test-time` view):** this sets an attendance machine's clock to a target time, waits, then restores it. It runs as a FastAPI `BackgroundTask`, with progress kept in the in-memory `TIME_TEST_JOBS` dict. The frontend polls `/logs/{task_id}` until the job reports `done`. There are two backends, registered in `TIME_TEST_MACHINES`:
 - `machine="zk"`: talks directly to a ZKTeco device through `bio/zk_tool.py` (pyzk).
-- `machine="rs9n"`: goes over HTTP to a separate attendance API service (`rs9n_call`), because the RS9N is a push device and can't be dialled directly.
+- `machine="rs9n"`: goes over HTTP to a separate attendance API service (`rs9n_call`), because the RS9N is a push device and can't be dialled directly. Commands are queued and applied when the device next polls. Requests have been seen to wait about 2 minutes before they are queued.
+
+The failsafes in that section must be kept:
+- Restore always targets the *correct* time, never "original + elapsed". For the RS9N this means `/api/set-time` is sent **with no `time`**, so the service stamps its clock when the device collects the command.
+- Once the clock may have been touched, every exit path restores. That includes a set that failed or wasn't confirmed, because an unconfirmed RS9N command stays queued.
+- Restores are verified and retried.
+- `_time_test_lock` allows only one test or restore at a time.
+- `.time_test_state.json` marks an unfinished test. `recover_interrupted_time_test` restores it on startup, and new tests are refused while it exists.
+- `POST /api/admin/test-time/restore` is the manual "Sync clock now".
+
+On the Linux Mint host the app runs as the systemd user service `task-itms.service`, published through cloudflared. Restart it with `systemctl --user restart task-itms.service`. Logs are in `journalctl --user -u task-itms.service`.
 
 `bio/` also contains standalone ZKTeco tools (see `bio/README.md`).
 

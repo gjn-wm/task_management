@@ -247,3 +247,5 @@ class TimeTestRequest(BaseModel):
 class VoiceTestRequest(BaseModel):
     index: int = 0
 
+class TimeRestoreRequest(BaseModel):
+    machine: str

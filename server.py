@@ -13,9 +13,9 @@ import uuid
 import json
 import urllib.request
 import urllib.error
-from bio.zk_tool import Managed, op_set_time, op_test_voice
-
-TIME_TEST_LOGS = {}
+import threading
+import traceback
+from bio.zk_tool import Managed, op_test_voice
 
 def _load_dotenv(path: str = ".env"):
     """Populate os.environ from a .env file, if one exists.
@@ -81,7 +81,11 @@ def rs9n_call(method: str, path: str, payload: dict = None, timeout: int = 120):
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8")
+        try:
             return json.loads(raw) if raw else {}
+        except ValueError:
+            raise RuntimeError(
+                f"The attendance API at {RS9N_API_BASE} sent a non-JSON reply: {raw[:120]!r}")
     except urllib.error.HTTPError as e:
         try:
             err_body = e.read().decode("utf-8", errors="replace")
@@ -96,11 +100,21 @@ def rs9n_call(method: str, path: str, payload: dict = None, timeout: int = 120):
                 f"{RS9N_API_BASE} (HTTP {e.code}, {err_body.strip()}). "
                 "The request never reached the service; check the Cloudflare "
                 "firewall / Browser Integrity Check rules for this server.")
-        # The attendance API returns a JSON envelope with a useful message;
-        # surface that rather than a bare "HTTP 503".
+        # 520-527: Cloudflare could not get an answer from the service in time
+        # (524 = it gave up after 100s). The request may well have been handled.
+        if 520 <= e.code <= 527:
+            raise RuntimeError(
+                f"Cloudflare got no timely answer from the attendance API (HTTP {e.code}). "
+                "The request may still have been processed.")
+        # The attendance API returns a JSON envelope with a useful message —
+        # top-level, or under "detail" for its HTTPExceptions — so surface that
+        # rather than a bare "HTTP 503".
         detail = ""
         try:
-            detail = json.loads(err_body).get("message", "")
+            body = json.loads(err_body)
+            nested = body.get("detail")
+            detail = body.get("message") or (
+                nested.get("message") if isinstance(nested, dict) else nested) or ""
         except Exception:
             pass
         if e.code in (401, 403):
@@ -114,6 +128,13 @@ def rs9n_call(method: str, path: str, payload: dict = None, timeout: int = 120):
             f"Could not reach the attendance API at {RS9N_API_BASE} ({e.reason}). "
             "Start attendance_api.py, or set the RS9N_API_BASE environment variable."
         )
+    except (TimeoutError, OSError) as e:
+        # Raised mid-response (read timeout, dropped connection), so it is not
+        # wrapped in URLError. The service may have acted on the request anyway.
+        raise RuntimeError(
+            f"The attendance API at {RS9N_API_BASE} did not answer in time or dropped "
+            f"the connection ({e or type(e).__name__}). The request may still have been "
+            "processed.")
 
 import models
 import schemas
@@ -1401,138 +1422,385 @@ def delete_backup(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete backup: {str(e)}")
 
-def perform_time_test(task_id: str, target_dt: datetime, wait_time_sec: int,
-                      machine: str = "zk"):
-    """Background task: set the machine clock, wait, then restore it.
+# --- Biometric machine time test ---------------------------------------------
+# Sets a machine's clock to a target time, waits, then puts it back. A machine
+# left on the wrong clock timestamps every punch wrongly, so once the clock may
+# have been touched, every exit path ends in a restore attempt:
+#   - restore targets the *correct* time, never "original + elapsed" worked out
+#     in advance. For the RS9N the clock service stamps the time when the device
+#     collects the command, so queueing/polling delay cannot make it stale (it
+#     used to: requests have sat 40s-2min before being queued, leaving the
+#     device ~2 minutes behind after every test);
+#   - a set that fails or is not confirmed is still restored. An unconfirmed
+#     RS9N command stays queued and would otherwise land later; the restore is
+#     queued behind it, and the device runs its queue in order;
+#   - each restore is verified against the device clock and retried;
+#   - a marker file records an unfinished test, so a crash or restart mid-test
+#     is restored on the next startup, and no new test starts until it is.
 
-    Dispatches on `machine`. Both paths emit the same log steps
-    (connect / set / wait / restore / error) so the frontend renders them
-    identically regardless of which machine ran.
-    """
+TIME_TEST_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".time_test_state.json")
+TIME_TEST_MIN_WAIT_SEC = 5
+TIME_TEST_MAX_WAIT_SEC = 600
+TIME_TEST_RESTORE_ATTEMPTS = 3
+TIME_TEST_RESTORE_BACKOFF_SEC = (5, 15)
+TIME_TEST_TOLERANCE_SEC = 5      # a restored clock must be within this of the real time
+TIME_TEST_JOB_TTL_SEC = 3600     # finished jobs' logs are kept this long
+RS9N_OFFLINE_AFTER_SEC = 120     # matches the clock service's own offline threshold
+# How long the clock service waits for the device to confirm. Kept well under
+# Cloudflare's 100s proxy timeout, since the service also waits ~15s for a fresh
+# handshake before replying.
+RS9N_SET_WAIT_SEC = 45
+# The HTTP timeout must also cover requests sitting in the service's queue.
+RS9N_SET_HTTP_TIMEOUT = 240
+
+TIME_TEST_JOBS = {}
+_time_test_lock = threading.Lock()          # one test or restore at a time
+_time_test_active = {"task_id": None}
+
+
+def _new_time_test_job(machine: str, kind: str) -> str:
+    now = time.time()
+    expired = [tid for tid, job in list(TIME_TEST_JOBS.items())
+               if job["done"] and now - (job["finished"] or now) > TIME_TEST_JOB_TTL_SEC]
+    for tid in expired:
+        TIME_TEST_JOBS.pop(tid, None)
+    task_id = str(uuid.uuid4())
+    TIME_TEST_JOBS[task_id] = {"machine": machine, "kind": kind, "logs": [],
+                               "done": False, "outcome": None, "finished": None}
+    _time_test_active["task_id"] = task_id
+    return task_id
+
+
+def _finish_time_test_job(task_id: str, outcome: str):
+    job = TIME_TEST_JOBS.get(task_id)
+    if job is not None:
+        job["outcome"] = outcome
+        job["done"] = True
+        job["finished"] = time.time()
+    _time_test_active["task_id"] = None
+    _time_test_lock.release()
+
+
+def _time_test_logger(task_id: str):
     def add_log(step: str, msg: str, status: str = "info"):
-        print(f"[Background Task] {msg}")
-        if task_id in TIME_TEST_LOGS:
-            TIME_TEST_LOGS[task_id].append({
+        # flush: under systemd stdout is a pipe, and buffered lines otherwise
+        # reach the journal minutes late with misleading timestamps.
+        print(f"[Time Test {task_id[:8]}] {step}: {msg}", flush=True)
+        job = TIME_TEST_JOBS.get(task_id)
+        if job is not None:
+            job["logs"].append({
                 "step": step,
                 "message": msg,
                 "status": status,
-                "time": datetime.now().strftime("%H:%M:%S")
+                "time": datetime.now().strftime("%H:%M:%S"),
             })
-
-    if machine == "rs9n":
-        return _perform_time_test_rs9n(add_log, target_dt, wait_time_sec)
-    return _perform_time_test_zk(add_log, target_dt, wait_time_sec)
+    return add_log
 
 
-def _perform_time_test_rs9n(add_log, target_dt: datetime, wait_time_sec: int):
-    """Time test against the Realtime RS9N / S362, via the attendance API.
+def _save_time_test_state(state: dict):
+    tmp = TIME_TEST_STATE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(state, fh)
+    os.replace(tmp, TIME_TEST_STATE_FILE)
 
-    Differs from the ZK path in one way that matters: SET_TIME is QUEUED, not
-    applied instantly — the device collects it on its next poll. The clock
-    service waits for the device to confirm, so each call takes a few seconds.
-    Those seconds are measured and folded into the restore value; otherwise the
-    device would come back from the test running that much slow.
-    """
+
+def _load_time_test_state() -> Optional[dict]:
+    try:
+        with open(TIME_TEST_STATE_FILE, "r", encoding="utf-8") as fh:
+            state = json.load(fh)
+        return state if isinstance(state, dict) else {"machine": None}
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        # Unreadable marker: a test was still unfinished, but on which machine
+        # is unknown. Restoring both is harmless.
+        return {"machine": None}
+
+
+def _clear_time_test_state():
+    try:
+        os.remove(TIME_TEST_STATE_FILE)
+    except FileNotFoundError:
+        pass
+
+
+def _parse_service_time(value) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+# RS9N: reached through the attendance API (see rs9n_call).
+
+def _rs9n_read_clock(attempts: int = 3) -> dict:
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            return rs9n_call("GET", "/api/clock", timeout=30).get("data") or {}
+        except RuntimeError as e:
+            last_error = e
+            if attempt < attempts - 1:
+                time.sleep(3)
+    raise last_error
+
+
+def _rs9n_preflight(add_log) -> bool:
     add_log("connect", "Contacting attendance API...", "pending")
     try:
-        clock = rs9n_call("GET", "/api/clock", timeout=30)
+        clock = _rs9n_read_clock()
     except RuntimeError as e:
-        add_log("error", str(e), "error")
-        return
+        add_log("error", f"{e} Nothing was changed on the machine.", "error")
+        return False
 
-    info = clock.get("data") or {}
-    device_id = info.get("device_id", "?")
-    original_device_time = None
-    if info.get("device_time"):
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
-            try:
-                original_device_time = datetime.strptime(info["device_time"], fmt)
-                break
-            except ValueError:
-                continue
+    device_id = clock.get("device_id", "?")
+    device_time = _parse_service_time(clock.get("device_time"))
+    last_contact = _parse_service_time(clock.get("server_time_at_last_contact"))
+    service_now = _parse_service_time(clock.get("server_time_now"))
+    if device_time is None or last_contact is None or service_now is None:
+        add_log("error", f"RS9N {device_id} has not reported a usable clock yet. "
+                         "Nothing was changed on the machine.", "error")
+        return False
 
-    if original_device_time is None:
-        add_log("error", "The RS9N has not reported a usable clock yet — it may be "
-                         "offline. Cannot run the test without knowing its current time.",
-                "error")
-        return
+    silent_for = (service_now - last_contact).total_seconds()
+    if silent_for > RS9N_OFFLINE_AFTER_SEC:
+        add_log("error", f"RS9N {device_id} last contacted the clock service "
+                         f"{int(silent_for)}s ago and looks offline, so it could not "
+                         "collect the change. Nothing was changed on the machine.", "error")
+        return False
 
-    add_log("connect", f"Connected to RS9N {device_id}. "
-                       f"Original device time: {original_device_time}", "success")
+    add_log("connect", f"Connected to RS9N {device_id}. Device time: {device_time}", "success")
+    drift = clock.get("drift_seconds")
+    if drift is not None and abs(drift) > TIME_TEST_TOLERANCE_SEC:
+        add_log("connect", f"Note: the device clock is already {clock.get('drift_human') or drift}; "
+                           "the restore will put it on the correct time.", "info")
+    return True
 
-    # Wall clock from here, so the restore accounts for real elapsed time.
-    started = datetime.now()
 
-    add_log("set", f"Setting device time to: {target_dt} (queued for next device poll)", "pending")
+def _rs9n_set(add_log, target_dt: datetime) -> bool:
+    add_log("set", f"Setting device time to: {target_dt} "
+                   "(queued; applied when the device next polls)", "pending")
     try:
         res = rs9n_call("POST", "/api/set-time", {
             "time": target_dt.strftime("%Y-%m-%d %H:%M:%S"),
-            "wait_seconds": 60,
-        })
+            "wait_seconds": RS9N_SET_WAIT_SEC,
+        }, timeout=RS9N_SET_HTTP_TIMEOUT)
     except RuntimeError as e:
-        add_log("error", f"Failed to set time: {e}", "error")
-        return
+        add_log("error", f"Setting the time failed: {e} It may still have been "
+                         "queued, so restoring to be safe.", "error")
+        return False
 
     if not res.get("confirmed"):
-        add_log("error", "The RS9N did not confirm the time change: "
-                         f"{res.get('message', 'no confirmation')}", "error")
-        return
+        add_log("error", f"The RS9N did not confirm within {RS9N_SET_WAIT_SEC}s. The change "
+                         "stays queued and would apply later, so restoring now.", "error")
+        return False
+    if res.get("return_code") not in (None, "OK"):
+        add_log("error", f"The RS9N answered '{res.get('return_code')}' to the time change. "
+                         "Restoring to be safe.", "error")
+        return False
     add_log("set", "Time set successfully on the machine.", "success")
-
-    add_log("wait", f"Waiting for {wait_time_sec} seconds to let you test...", "pending")
-    time.sleep(wait_time_sec)
-    add_log("wait", "Wait time completed.", "success")
-
-    # Original time + everything that actually elapsed (queueing + wait).
-    elapsed = (datetime.now() - started).total_seconds()
-    restore_time = original_device_time + timedelta(seconds=elapsed)
-
-    add_log("restore", f"Restoring device time to: {restore_time}", "pending")
-    try:
-        res = rs9n_call("POST", "/api/set-time", {
-            "time": restore_time.strftime("%Y-%m-%d %H:%M:%S"),
-            "wait_seconds": 60,
-        })
-    except RuntimeError as e:
-        add_log("error", f"Failed to restore time: {e}", "error")
-        return
-
-    if res.get("confirmed"):
-        add_log("restore", "Machine time restored successfully. Test complete!", "success")
-    else:
-        add_log("error", "The RS9N did not confirm the restore — check its clock "
-                         "before trusting new punches.", "error")
+    return True
 
 
-def _perform_time_test_zk(add_log, target_dt: datetime, wait_time_sec: int):
-    """Time test against a ZKTeco machine (direct pyzk connection)."""
+def _rs9n_restore(add_log) -> bool:
+    for attempt in range(1, TIME_TEST_RESTORE_ATTEMPTS + 1):
+        add_log("restore", f"Restoring device time to the correct time "
+                           f"(attempt {attempt}/{TIME_TEST_RESTORE_ATTEMPTS})...", "pending")
+        try:
+            # No "time": the service stamps its own clock when the device collects
+            # the command, so the value cannot go stale while it is queued.
+            res = rs9n_call("POST", "/api/set-time", {"wait_seconds": RS9N_SET_WAIT_SEC},
+                            timeout=RS9N_SET_HTTP_TIMEOUT)
+            if not res.get("confirmed"):
+                add_log("restore", f"Not confirmed yet: {res.get('message', 'no reply from device')}",
+                        "warning")
+            else:
+                after = res.get("clock_after") or {}
+                drift = after.get("drift_seconds")
+                if drift is None:
+                    # Confirmed, but the device has not polled again; read it once more.
+                    time.sleep(10)
+                    drift = _rs9n_read_clock().get("drift_seconds")
+                if drift is not None and abs(drift) <= TIME_TEST_TOLERANCE_SEC:
+                    add_log("restore", f"Machine time restored successfully ({drift:+.0f}s from "
+                                       "correct time). Test complete!", "success")
+                    return True
+                add_log("restore", f"Device confirmed, but its clock is still off "
+                                   f"({drift if drift is not None else 'unknown'}s).", "warning")
+        except RuntimeError as e:
+            add_log("restore", f"Restore attempt failed: {e}", "warning")
+        if attempt < TIME_TEST_RESTORE_ATTEMPTS:
+            time.sleep(TIME_TEST_RESTORE_BACKOFF_SEC[min(attempt - 1, len(TIME_TEST_RESTORE_BACKOFF_SEC) - 1)])
+    return False
+
+
+# ZKTeco: direct pyzk connection via bio/zk_tool.py. Changes apply immediately.
+
+def _zk_preflight(add_log) -> bool:
     add_log("connect", "Connecting to biometric device...", "pending")
     try:
         with Managed() as conn:
-            original_device_time = conn.get_time()
-            add_log("connect", f"Connected. Original device time: {original_device_time}", "success")
-            
-            add_log("set", f"Setting device time to: {target_dt}", "pending")
-            op_set_time(conn, target_dt)
-            add_log("set", "Time set successfully on the machine.", "success")
+            device_time = conn.get_time()
     except Exception as e:
-        add_log("error", f"Failed to connect or set time: {e}", "error")
-        return
+        add_log("error", f"Could not connect to the ZKTeco machine: {e}. "
+                         "Nothing was changed on the machine.", "error")
+        return False
+    add_log("connect", f"Connected. Original device time: {device_time}", "success")
+    return True
 
-    add_log("wait", f"Waiting for {wait_time_sec} seconds to let you test...", "pending")
-    time.sleep(wait_time_sec)
-    add_log("wait", f"Wait time completed.", "success")
-    
-    # Calculate time to restore: original time + the time we waited
-    restore_time = original_device_time + timedelta(seconds=wait_time_sec)
-    
-    add_log("restore", f"Restoring device time to: {restore_time}", "pending")
+
+def _zk_set(add_log, target_dt: datetime) -> bool:
+    add_log("set", f"Setting device time to: {target_dt}", "pending")
     try:
         with Managed() as conn:
-            op_set_time(conn, restore_time)
-            add_log("restore", "Machine time restored successfully. Test complete!", "success")
+            conn.set_time(target_dt)
+            device_time = conn.get_time()
     except Exception as e:
-        add_log("error", f"Failed to restore time: {e}", "error")
+        add_log("error", f"Setting the time failed: {e}. It may have been applied, "
+                         "so restoring to be safe.", "error")
+        return False
+    if abs((device_time - target_dt).total_seconds()) > TIME_TEST_TOLERANCE_SEC:
+        add_log("error", f"The machine reports {device_time} after the change. "
+                         "Restoring to be safe.", "error")
+        return False
+    add_log("set", "Time set successfully on the machine.", "success")
+    return True
+
+
+def _zk_restore(add_log) -> bool:
+    for attempt in range(1, TIME_TEST_RESTORE_ATTEMPTS + 1):
+        add_log("restore", f"Restoring device time to the correct time "
+                           f"(attempt {attempt}/{TIME_TEST_RESTORE_ATTEMPTS})...", "pending")
+        try:
+            # This server's clock is NTP-synced; "original + elapsed" would carry
+            # over any error the machine already had.
+            with Managed() as conn:
+                conn.set_time(datetime.now())
+                drift = (conn.get_time() - datetime.now()).total_seconds()
+            if abs(drift) <= TIME_TEST_TOLERANCE_SEC:
+                add_log("restore", f"Machine time restored successfully ({drift:+.0f}s from "
+                                   "correct time). Test complete!", "success")
+                return True
+            add_log("restore", f"Machine clock is still off by {drift:+.0f}s.", "warning")
+        except Exception as e:
+            add_log("restore", f"Restore attempt failed: {e}", "warning")
+        if attempt < TIME_TEST_RESTORE_ATTEMPTS:
+            time.sleep(TIME_TEST_RESTORE_BACKOFF_SEC[min(attempt - 1, len(TIME_TEST_RESTORE_BACKOFF_SEC) - 1)])
+    return False
+
+
+TIME_TEST_MACHINES = {
+    "zk": {"preflight": _zk_preflight, "set": _zk_set, "restore": _zk_restore},
+    "rs9n": {"preflight": _rs9n_preflight, "set": _rs9n_set, "restore": _rs9n_restore},
+}
+
+
+def _restore_failed_message(machine: str) -> str:
+    return (f"COULD NOT RESTORE the {machine} clock, so it may still be on the test time and "
+            "every punch will be timestamped wrongly. Use 'Sync clock now' once the machine "
+            "is reachable; the server also retries on its next start.")
+
+
+def perform_time_test(task_id: str, machine: str, target_dt: datetime, wait_time_sec: int):
+    """Background task: set the clock, wait, restore. Holds _time_test_lock."""
+    add_log = _time_test_logger(task_id)
+    impl = TIME_TEST_MACHINES[machine]
+    outcome = "failed"
+    clock_touched = False
+    set_ok = False
+    try:
+        if not impl["preflight"](add_log):
+            outcome = "aborted"
+            return
+        try:
+            _save_time_test_state({"machine": machine, "task_id": task_id,
+                                   "target": str(target_dt),
+                                   "started_at": datetime.now().isoformat(sep=" ")})
+        except OSError as e:
+            add_log("error", f"Could not write the recovery marker ({e}); refusing to change "
+                             "the clock without a way to restore it after a crash.", "error")
+            outcome = "aborted"
+            return
+
+        clock_touched = True
+        set_ok = impl["set"](add_log, target_dt)
+        if set_ok:
+            add_log("wait", f"Waiting for {wait_time_sec} seconds to let you test...", "pending")
+            time.sleep(wait_time_sec)
+            add_log("wait", "Wait time completed.", "success")
+    except Exception as e:
+        print(f"[Time Test {task_id[:8]}] unexpected error", flush=True)
+        traceback.print_exc()
+        add_log("error", f"Unexpected error: {e!r}. Restoring to be safe.", "error")
+    finally:
+        try:
+            if clock_touched:
+                try:
+                    restored = impl["restore"](add_log)
+                except Exception as e:
+                    traceback.print_exc()
+                    add_log("restore", f"Restore crashed: {e!r}", "warning")
+                    restored = False
+                if restored:
+                    _clear_time_test_state()
+                    outcome = "success" if set_ok else "set_failed_restored"
+                else:
+                    outcome = "restore_failed"
+                    add_log("error", _restore_failed_message(machine), "error")
+        finally:
+            _finish_time_test_job(task_id, outcome)
+
+
+def run_clock_restore(task_id: str, machines: List[str], reason: str):
+    """Background job: put machines back on the correct time. Holds _time_test_lock."""
+    add_log = _time_test_logger(task_id)
+    outcome = "restore_failed"
+    try:
+        add_log("restore", reason, "info")
+        failed = []
+        for machine in machines:
+            try:
+                ok = TIME_TEST_MACHINES[machine]["restore"](add_log)
+            except Exception as e:
+                traceback.print_exc()
+                add_log("restore", f"Restore crashed: {e!r}", "warning")
+                ok = False
+            if not ok:
+                failed.append(machine)
+                add_log("error", _restore_failed_message(machine), "error")
+        if not failed:
+            _clear_time_test_state()
+            outcome = "restored"
+    finally:
+        _finish_time_test_job(task_id, outcome)
+
+
+@app.on_event("startup")
+def recover_interrupted_time_test():
+    """A test was cut short (crash/restart) before its restore: restore now."""
+    state = _load_time_test_state()
+    if state is None or not _time_test_lock.acquire(blocking=False):
+        return
+    machine = state.get("machine")
+    machines = [machine] if machine in TIME_TEST_MACHINES else list(TIME_TEST_MACHINES)
+    task_id = _new_time_test_job(",".join(machines), "recovery")
+    threading.Thread(
+        target=run_clock_restore,
+        args=(task_id, machines,
+              "A time test was interrupted before it could restore the clock "
+              "(server restart?). Restoring now..."),
+        name="time-test-recovery", daemon=True,
+    ).start()
+
+
+def _time_test_busy_error():
+    return HTTPException(status_code=409, detail={
+        "message": "A time test or clock restore is already running.",
+        "task_id": _time_test_active["task_id"],
+    })
+
 
 @app.post("/api/admin/test-time")
 def run_time_test(
@@ -1541,9 +1809,14 @@ def run_time_test(
     admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN, auth.ROLE_MANAGER]))
 ):
     machine = (req.machine or "zk").strip().lower()
-    if machine not in ("zk", "rs9n"):
+    if machine not in TIME_TEST_MACHINES:
         raise HTTPException(status_code=400,
                             detail=f"machine must be 'zk' or 'rs9n'. Received: '{req.machine}'")
+
+    if not TIME_TEST_MIN_WAIT_SEC <= req.wait_time_sec <= TIME_TEST_MAX_WAIT_SEC:
+        raise HTTPException(status_code=400,
+                            detail=f"wait_time_sec must be between {TIME_TEST_MIN_WAIT_SEC} and "
+                                   f"{TIME_TEST_MAX_WAIT_SEC} seconds.")
 
     if req.use_today:
         target_date_str = datetime.now().date().strftime("%Y-%m-%d")
@@ -1562,11 +1835,24 @@ def run_time_test(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid date or time format. Details: {e}")
 
-    task_id = str(uuid.uuid4())
-    TIME_TEST_LOGS[task_id] = []
-
-    # Add the test process to background tasks
-    background_tasks.add_task(perform_time_test, task_id, target_dt, req.wait_time_sec, machine)
+    if not _time_test_lock.acquire(blocking=False):
+        raise _time_test_busy_error()
+    try:
+        pending = _load_time_test_state()
+        if pending is not None:
+            raise HTTPException(status_code=409, detail={
+                "message": "A previous time test did not restore the "
+                           f"{pending.get('machine') or 'machine'} clock. Use 'Sync clock now' "
+                           "first.",
+                "task_id": None,
+                "pending_restore": pending.get("machine") or "unknown",
+            })
+        task_id = _new_time_test_job(machine, "test")
+        background_tasks.add_task(perform_time_test, task_id, machine, target_dt, req.wait_time_sec)
+    except BaseException:
+        _time_test_active["task_id"] = None
+        _time_test_lock.release()
+        raise
 
     return {
         "status": "success",
@@ -1574,17 +1860,59 @@ def run_time_test(
         "machine": machine,
         "message": f"Time test initiated on '{machine}'. Setting time to {target_dt}, "
                    f"waiting {req.wait_time_sec}s, then restoring.",
-        "note": "Check the server console for live progress."
     }
+
+
+@app.post("/api/admin/test-time/restore")
+def restore_machine_time(
+    req: schemas.TimeRestoreRequest,
+    background_tasks: BackgroundTasks,
+    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN, auth.ROLE_MANAGER]))
+):
+    """Manually put a machine back on the correct time."""
+    machine = (req.machine or "").strip().lower()
+    if machine not in TIME_TEST_MACHINES:
+        raise HTTPException(status_code=400,
+                            detail=f"machine must be 'zk' or 'rs9n'. Received: '{req.machine}'")
+    if not _time_test_lock.acquire(blocking=False):
+        raise _time_test_busy_error()
+    try:
+        task_id = _new_time_test_job(machine, "restore")
+        background_tasks.add_task(run_clock_restore, task_id, [machine],
+                                  f"Syncing the {machine} clock to the correct time...")
+    except BaseException:
+        _time_test_active["task_id"] = None
+        _time_test_lock.release()
+        raise
+    return {"status": "success", "task_id": task_id, "machine": machine}
+
+
+@app.get("/api/admin/test-time/active")
+def get_active_time_test(
+    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN, auth.ROLE_MANAGER]))
+):
+    pending = _load_time_test_state()
+    return {
+        "task_id": _time_test_active["task_id"],
+        "pending_restore": (pending.get("machine") or "unknown") if pending else None,
+    }
+
 
 @app.get("/api/admin/test-time/logs/{task_id}")
 def get_time_test_logs(
     task_id: str,
     admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN, auth.ROLE_MANAGER]))
 ):
-    if task_id not in TIME_TEST_LOGS:
+    job = TIME_TEST_JOBS.get(task_id)
+    if job is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    return {"logs": TIME_TEST_LOGS[task_id]}
+    return {
+        "logs": list(job["logs"]),
+        "done": job["done"],
+        "outcome": job["outcome"],
+        "machine": job["machine"],
+        "kind": job["kind"],
+    }
 
 @app.post("/api/admin/test-voice")
 def run_voice_test(

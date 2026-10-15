@@ -743,11 +743,17 @@
                     </div>
                     <div class="form-group" style="margin-top: 15px;">
                         <label>Wait Time (seconds)</label>
-                        <input type="number" id="test-time-wait-time" class="input-field" value="30" required>
+                        <input type="number" id="test-time-wait-time" class="input-field" value="30" min="5" max="600" required>
                     </div>
-                    <button class="primary-btn" onclick="submitTestTime()" style="margin-top: 20px;">
-                        <i data-lucide="play-circle"></i> Run Time Test
-                    </button>
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px;">
+                        <button class="primary-btn" id="test-time-run-btn" onclick="submitTestTime()">
+                            <i data-lucide="play-circle"></i> Run Time Test
+                        </button>
+                        <button class="secondary-btn" id="test-time-sync-btn" onclick="syncMachineClock()"
+                                title="Put the selected machine back on the correct time">
+                            <i data-lucide="refresh-cw"></i> Sync clock now
+                        </button>
+                    </div>
                     <div id="test-time-result" style="margin-top: 15px; font-weight: bold; font-size: 14px; white-space: pre-wrap; font-family: monospace; background: var(--bg-color); padding: 10px; border-radius: 4px; display: none;"></div>
                 </div>
             </div>
@@ -1619,6 +1625,7 @@
             } else if (viewName === 'test-time') {
                 titleEl.textContent = 'Time Test';
                 subtitleEl.textContent = 'Set and test machine time';
+                checkActiveTimeTest();
             } else if (viewName === 'projects') {
                 titleEl.textContent = 'Projects';
                 subtitleEl.textContent = 'Internal project workspaces for the team';
@@ -2918,135 +2925,226 @@
                 // The RS9N is a push device: the change is queued and applied on its
                 // next poll, so it is worth telling the user before they wait.
                 note.textContent = (machine === 'rs9n')
-                    ? 'Queued via the RS9N clock service; the device applies it on its next poll (a few seconds). That service must be running.'
+                    ? 'Queued via the RS9N clock service; the device applies it on its next poll. Each step can take up to a couple of minutes.'
                     : 'Connects directly to the ZKTeco machine.';
             }
         }
 
-        async function submitTestTime() {
-            const useToday = document.getElementById('test-time-use-today').checked;
-            const targetDate = document.getElementById('test-time-target-date').value;
-            const hVal = document.getElementById('test-time-hh').value;
-            const mVal = document.getElementById('test-time-mm').value;
-            const sVal = document.getElementById('test-time-ss').value;
-            const targetTime = `${hVal}:${mVal}:${sVal}`;
-            const waitTime = parseInt(document.getElementById('test-time-wait-time').value, 10);
-            
-            if (!useToday && !targetDate) {
-                alert("Please select a target date");
-                return;
-            }
-            if (!useToday && !/^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])$/.test(targetDate)) {
-                alert("Please enter a valid target date (YYYY-MM-DD)");
-                return;
-            }
-            
-            const payload = {
-                use_today: useToday,
-                target_date: useToday ? null : targetDate,
-                target_time: targetTime,
-                wait_time_sec: waitTime || 30,
-                machine: window.testTimeMachine || 'zk'
-            };
-            
+        // The time test runs on the server; this page only watches its job. The
+        // job reports `done`, so watching stops on that (not on the wording of the
+        // last line), and a dropped poll is retried instead of giving up.
+        const TIME_TEST_OUTCOMES = {
+            success: ['Test complete. The machine is back on the correct time.', 'var(--success)'],
+            restored: ['The machine clock is back on the correct time.', 'var(--success)'],
+            set_failed_restored: ['The test time could not be applied. The machine was put back on the correct time.', 'var(--warning)'],
+            aborted: ['The test did not start. Nothing was changed on the machine.', 'var(--warning)'],
+            restore_failed: ['The machine clock could NOT be restored. Press "Sync clock now" once the machine is reachable.', 'var(--error)'],
+            failed: ['The test failed.', 'var(--error)']
+        };
+        const TIME_TEST_ICONS = {
+            success: ['✓', 'var(--success)'],
+            error: ['!', 'var(--error)'],
+            warning: ['!', 'var(--warning)']
+        };
+
+        function setTimeTestBusy(busy) {
+            ['test-time-run-btn', 'test-time-sync-btn'].forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn) {
+                    btn.disabled = busy;
+                    btn.style.opacity = busy ? '0.55' : '';
+                    btn.style.cursor = busy ? 'not-allowed' : '';
+                }
+            });
+        }
+
+        function timeTestErrorText(data, fallback) {
+            const d = data && data.detail;
+            if (!d) return fallback;
+            if (typeof d === 'string') return d;
+            if (Array.isArray(d)) return d.map(e => e.msg).join('; ');
+            return d.message || fallback;
+        }
+
+        function showTimeTestMessage(text, color) {
             const resultEl = document.getElementById('test-time-result');
             resultEl.style.display = 'block';
-            resultEl.textContent = "Starting time test... Check backend console for progress.";
-            resultEl.style.color = "var(--primary-color)";
-            
-            // Clear previous interval if exists
-            if (window.testTimeInterval) {
-                clearInterval(window.testTimeInterval);
+            resultEl.textContent = text;
+            resultEl.style.color = color;
+        }
+
+        function renderTimeTestLogs(logs, outcome) {
+            const resultEl = document.getElementById('test-time-result');
+            resultEl.style.display = 'block';
+            resultEl.style.color = 'var(--text-primary)';
+            resultEl.style.background = 'var(--bg-secondary)';
+            resultEl.style.padding = '16px';
+            resultEl.style.borderRadius = '8px';
+            resultEl.style.border = '1px solid var(--border-color)';
+            resultEl.replaceChildren();
+
+            const logList = document.createElement('div');
+            logList.style.cssText = 'display: flex; flex-direction: column; gap: 14px;';
+
+            logs.forEach(log => {
+                const [glyph, color] = TIME_TEST_ICONS[log.status] || ['⌛', 'var(--accent-color)'];
+                const stepRow = document.createElement('div');
+                stepRow.style.cssText = 'display: flex; align-items: flex-start; gap: 12px;';
+
+                const icon = document.createElement('div');
+                icon.style.cssText = 'width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px; flex-shrink: 0;';
+                icon.style.background = color;
+                icon.textContent = glyph;
+
+                const body = document.createElement('div');
+                body.style.cssText = 'flex: 1; padding-top: 2px;';
+                // textContent, not innerHTML: messages carry text from the device and the clock service.
+                const msg = document.createElement('div');
+                msg.style.cssText = 'font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px;';
+                msg.textContent = log.message;
+                const when = document.createElement('div');
+                when.style.cssText = 'font-size: 11px; color: var(--text-secondary); letter-spacing: 0.5px;';
+                when.textContent = log.time || '';
+                body.append(msg, when);
+
+                stepRow.append(icon, body);
+                logList.appendChild(stepRow);
+            });
+            resultEl.appendChild(logList);
+
+            if (outcome && TIME_TEST_OUTCOMES[outcome]) {
+                const [text, color] = TIME_TEST_OUTCOMES[outcome];
+                const banner = document.createElement('div');
+                banner.style.cssText = 'margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-color); font-size: 13px; font-weight: 700;';
+                banner.style.color = color;
+                banner.textContent = text;
+                resultEl.appendChild(banner);
             }
-            
+        }
+
+        function monitorTimeTest(taskId) {
+            if (window.testTimeInterval) clearInterval(window.testTimeInterval);
+            setTimeTestBusy(true);
+            const MAX_FAILED_POLLS = 30;   // ~1 minute of consecutive failures
+            let failedPolls = 0;
+            let inFlight = false;
+            const stop = () => {
+                clearInterval(window.testTimeInterval);
+                window.testTimeInterval = null;
+                setTimeTestBusy(false);
+            };
+            const poll = async () => {
+                if (inFlight) return;
+                inFlight = true;
+                try {
+                    const res = await fetch(`/api/admin/test-time/logs/${taskId}`);
+                    if (res.status === 404) {
+                        // Server restarted: an unfinished test is restored on startup
+                        // as a new job, so pick that up if there is one.
+                        stop();
+                        showTimeTestMessage('The server restarted during this run. Checking whether it is restoring the clock...', 'var(--warning)');
+                        checkActiveTimeTest(true);
+                        return;
+                    }
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    const data = await res.json();
+                    failedPolls = 0;
+                    if (data.logs && data.logs.length) {
+                        renderTimeTestLogs(data.logs, data.done ? data.outcome : null);
+                    }
+                    if (data.done) stop();
+                } catch (err) {
+                    console.error('Error fetching time test logs', err);
+                    if (++failedPolls >= MAX_FAILED_POLLS) {
+                        stop();
+                        showTimeTestMessage('Lost contact with the server. The test keeps running there and still restores the clock; reopen this page to check on it.', 'var(--error)');
+                    }
+                } finally {
+                    inFlight = false;
+                }
+            };
+            window.testTimeInterval = setInterval(poll, 2000);
+            poll();
+        }
+
+        // Resume watching a test still running on the server (page reload, or the
+        // startup recovery after a restart), or flag a clock left unrestored.
+        async function checkActiveTimeTest(afterRestart = false) {
             try {
-                const res = await fetch('/api/admin/test-time', {
+                const res = await fetch('/api/admin/test-time/active');
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.task_id) {
+                    monitorTimeTest(data.task_id);
+                } else if (data.pending_restore) {
+                    showTimeTestMessage(`A previous test did not restore the ${data.pending_restore} clock. Press "Sync clock now".`, 'var(--error)');
+                } else if (afterRestart) {
+                    showTimeTestMessage('The server restarted during this run and has no unfinished test on record. Check the machine clock; use "Sync clock now" if it is wrong.', 'var(--warning)');
+                }
+            } catch (err) {
+                console.error('Error checking for an active time test', err);
+            }
+        }
+
+        async function startTimeTestJob(url, payload, startingText) {
+            showTimeTestMessage(startingText, 'var(--accent-color)');
+            setTimeTestBusy(true);
+            try {
+                const res = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
-                const data = await res.json();
-                if (res.ok) {
-                    resultEl.textContent = "Task initiated. Waiting for logs...";
-                    resultEl.style.color = "var(--text-color)";
-                    
-                    const taskId = data.task_id;
-                    window.testTimeInterval = setInterval(async () => {
-                        try {
-                            const logRes = await fetch(`/api/admin/test-time/logs/${taskId}`);
-                            if (logRes.ok) {
-                                const logData = await logRes.json();
-                                if (logData.logs && logData.logs.length > 0) {
-                                    resultEl.innerHTML = '';
-                                    resultEl.style.background = 'var(--bg-secondary)';
-                                    resultEl.style.padding = '16px';
-                                    resultEl.style.borderRadius = '8px';
-                                    resultEl.style.border = '1px solid var(--border-color)';
-                                    
-                                    const logList = document.createElement('div');
-                                    logList.style.display = 'flex';
-                                    logList.style.flexDirection = 'column';
-                                    logList.style.gap = '14px'; // Proper spacing
-                                    
-                                    logData.logs.forEach(log => {
-                                        const stepRow = document.createElement('div');
-                                        stepRow.style.display = 'flex';
-                                        stepRow.style.alignItems = 'flex-start';
-                                        stepRow.style.gap = '12px';
-                                        
-                                        let msgText = typeof log === 'object' ? log.message : log;
-                                        let logStatus = typeof log === 'object' ? log.status : 'info';
-                                        let logTime = typeof log === 'object' ? log.time : new Date().toLocaleTimeString();
-
-                                        let iconHtml = '<div style="width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:var(--primary-color); color:white; font-weight:bold; font-size:12px; flex-shrink:0;">⌛</div>';
-                                        if (logStatus === 'success' || msgText.includes("restored successfully")) {
-                                            iconHtml = '<div style="width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:var(--success-color); color:white; font-weight:bold; font-size:12px; flex-shrink:0;">✓</div>';
-                                        } else if (logStatus === 'error' || msgText.includes("Error:")) {
-                                            iconHtml = '<div style="width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:var(--danger-color); color:white; font-weight:bold; font-size:14px; flex-shrink:0;">!</div>';
-                                        }
-                                        
-                                        stepRow.innerHTML = `
-                                            ${iconHtml}
-                                            <div style="flex: 1; padding-top: 2px;">
-                                                <div style="font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px;">${msgText}</div>
-                                                <div style="font-size: 11px; color: var(--text-secondary); letter-spacing: 0.5px;">${logTime}</div>
-                                            </div>
-                                        `;
-                                        logList.appendChild(stepRow);
-                                    });
-                                    resultEl.appendChild(logList);
-                                    
-                                    // Stop polling if done or error
-                                    const lastLog = logData.logs[logData.logs.length - 1];
-                                    const lastMsg = typeof lastLog === 'object' ? lastLog.message : lastLog;
-                                    const lastStatus = typeof lastLog === 'object' ? lastLog.status : '';
-                                    
-                                    if (lastStatus === 'error' || lastMsg.includes("restored successfully") || lastMsg.includes("Error:")) {
-                                        clearInterval(window.testTimeInterval);
-                                    }
-                                }
-                            } else {
-                                // Task not found or server error (e.g. server restarted)
-                                clearInterval(window.testTimeInterval);
-                                if (logRes.status === 404) {
-                                    resultEl.textContent = "Logs no longer available. (Did the server restart?)";
-                                }
-                            }
-                        } catch (err) {
-                            console.error("Error fetching logs", err);
-                            // Also clear interval on hard network failures
-                            clearInterval(window.testTimeInterval);
-                        }
-                    }, 1000);
-                    
-                } else {
-                    resultEl.textContent = "Error: " + (data.detail || "Failed");
-                    resultEl.style.color = "var(--danger-color)";
+                const data = await res.json().catch(() => ({}));
+                if (res.ok && data.task_id) {
+                    monitorTimeTest(data.task_id);
+                    return;
                 }
+                if (res.status === 409 && data.detail && data.detail.task_id) {
+                    // Something is already running: show that instead of starting another.
+                    monitorTimeTest(data.detail.task_id);
+                    return;
+                }
+                setTimeTestBusy(false);
+                showTimeTestMessage('Error: ' + timeTestErrorText(data, `Request failed (HTTP ${res.status})`), 'var(--error)');
             } catch (err) {
-                resultEl.textContent = "Error: " + err.message;
-                resultEl.style.color = "var(--danger-color)";
+                setTimeTestBusy(false);
+                showTimeTestMessage('Error: ' + err.message, 'var(--error)');
+                // The request may have reached the server before the connection dropped.
+                checkActiveTimeTest();
             }
+        }
+
+        function submitTestTime() {
+            const useToday = document.getElementById('test-time-use-today').checked;
+            const targetDate = document.getElementById('test-time-target-date').value.trim();
+            const hVal = document.getElementById('test-time-hh').value;
+            const mVal = document.getElementById('test-time-mm').value;
+            const sVal = document.getElementById('test-time-ss').value;
+            const waitTime = parseInt(document.getElementById('test-time-wait-time').value, 10);
+
+            if (!useToday && !/^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])$/.test(targetDate)) {
+                showTimeTestMessage('Please enter a valid target date (YYYY-MM-DD).', 'var(--error)');
+                return;
+            }
+            if (!Number.isInteger(waitTime) || waitTime < 5 || waitTime > 600) {
+                showTimeTestMessage('Wait time must be between 5 and 600 seconds.', 'var(--error)');
+                return;
+            }
+
+            startTimeTestJob('/api/admin/test-time', {
+                use_today: useToday,
+                target_date: useToday ? null : targetDate,
+                target_time: `${hVal}:${mVal}:${sVal}`,
+                wait_time_sec: waitTime,
+                machine: window.testTimeMachine || 'zk'
+            }, 'Starting time test...');
+        }
+
+        function syncMachineClock() {
+            const machine = window.testTimeMachine || 'zk';
+            startTimeTestJob('/api/admin/test-time/restore', { machine },
+                `Syncing the ${machine === 'rs9n' ? 'RS9N' : 'ZKTeco'} clock to the correct time...`);
         }
 
         async function testVoice(index) {

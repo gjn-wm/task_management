@@ -39,3 +39,7 @@ backups/*
 # IDE / editor files
 .vscode/
 .idea/
+
+# Marker for an unfinished biometric time test (restored on startup)
+.time_test_state.json
+.time_test_state.json.tmp
