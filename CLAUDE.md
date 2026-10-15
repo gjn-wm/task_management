@@ -39,11 +39,19 @@ There is no test suite, linter or build step. Frontend assets are served as-is f
 
 **Task status:** the columns are fixed: Backlog → Todo → In Progress → Review → Testing → Done. Always change status through `apply_task_status()`, which sets and clears `completed_at`. Analytics, burndown and velocity depend on `completed_at`.
 
-**Dates:** `Task.due_date`, `Sprint.start_date` and `Sprint.end_date` are **strings** (`YYYY-MM-DD`), not Date columns. Timestamps (`created_at`, `completed_at`, `ActivityLog.timestamp`, …) are naive UTC (`datetime.utcnow`) and serialize **without** a timezone suffix. The frontend must parse them as `new Date(value + 'Z')`; without the `Z`, IST users see times 5½ h off. Server-side "today" and "this week" checks use local `datetime.now()`, so mixing them with UTC timestamps is a known source of off-by-one-day bugs.
+**Dates:** `Task.due_date`, `Sprint.start_date` and `Sprint.end_date` are **strings** (`YYYY-MM-DD`), not Date columns. Timestamps (`created_at`, `completed_at`, `ActivityLog.timestamp`, …) are naive UTC (`datetime.utcnow`) and serialize **without** a timezone suffix. The frontend must parse them with `parseServerDate()`, which appends the `Z`; without it, IST users see times 5½ h off. For a local `YYYY-MM-DD` use `localDateStr()`, never `toISOString()`, which gives the UTC date. On the server, convert a timestamp with `utc_to_local_date()` before comparing it with local "today" or "this week" values.
 
-**Update semantics:** the `PUT` handlers (tasks, projects, sprints, users) copy only fields that are not `None`. Sending `null` therefore can't clear a field such as assignee, due date, project or sprint. Fixing that needs `model_dump(exclude_unset=True)`, not a `None` check.
+**Update semantics:** the `PUT` handlers for tasks, projects and sprints use `apply_updates()` (`model_dump(exclude_unset=True)`):
+- a field that is omitted is left unchanged
+- an explicit `null` clears the fields listed as `nullable` (assignee, due date, project, sprint, project lead)
+- a `null` for a required field is ignored
+
+Status still goes through `apply_task_status()`. In the bulk dropdowns, `""` is the "choose…" placeholder and `"none"` means clear.
+
+**Deletes keep history:** comments, attachments and activity entries use `ON DELETE SET NULL` for their author, and activity entries also do for their task. The migration is `set_fk_on_delete_null` in `upgrade_db.py`. The API returns `user: null` for a deleted author, which the UI shows as "Deleted user" via `userLabel()`. Deleting a task removes its attachment files from disk with `remove_attachment_files`.
 
 **Biometric clock "time test" (`/api/admin/test-time`, `/test-time` view):** this sets an attendance machine's clock to a target time, waits, then restores it. It runs as a FastAPI `BackgroundTask`, with progress kept in the in-memory `TIME_TEST_JOBS` dict. The frontend polls `/logs/{task_id}` until the job reports `done`. There are two backends, registered in `TIME_TEST_MACHINES`:
+- Admin-only (API and UI).
 - `machine="zk"`: talks directly to a ZKTeco device through `bio/zk_tool.py` (pyzk).
 - `machine="rs9n"`: goes over HTTP to a separate attendance API service (`rs9n_call`), because the RS9N is a push device and can't be dialled directly. Commands are queued and applied when the device next polls, within a few seconds. `RS9N_API_BASE` in `.env` points at the LAN address (`http://192.168.29.101:5004`), not `rs9n.itmsu.com`. From this network, one of that hostname's Cloudflare IPs intermittently drops connections, which used to stall requests for about 2 minutes. The service runs on a Windows host (`ssh wmwm`, PowerShell) as the scheduled task `\Attendance API 5004`, from `C:\xampp new\htdocs\python\biometric-attendance-api`. Its code is identical to `~/dev_gjn/zkteco_api/biometric-attendance-api`.
 
@@ -64,7 +72,9 @@ On the Linux Mint host the app runs as the systemd user service `task-itms.servi
 - Feature layers load after that script: `js/upgrade.js` (Phase 1: projects, bulk ops, subtasks), `js/phase2.js` (Phase 2: sprints, skills, notifications, charts) and `js/layout.js` (responsive shell, mobile Kanban). They work by **reassigning the inline script's global functions** on `DOMContentLoaded` (for example `loadTasks = async function() {…}` in `upgrade.js`), often wrapping the original. The inline version is therefore often not the code that runs. Before editing, grep all four files for the function name.
   - `handleSaveTask`, `loadTasks` and `loadAllTasks` are fully replaced in `upgrade.js`.
   - `renderKanbanBoard` and `switchView` are wrapped in more than one layer.
-  - `refreshDataSilently`, the 60 s auto-refresh, is not patched at all.
+  - `refreshDataSilently` (every 60 s, and when the tab becomes visible) calls the real loaders, so filters survive: `loadTasks`, `loadAllTasks(1, {silent: true})`, `loadCalendar`, and the panel loaders. It skips hidden tabs and in-progress drags.
+  - `loadAllTasks(page, {quick, silent})`: `quick` is `'pending'` or `'overdue'` (from the dashboard KPI cards), and `silent` keeps the page and selection.
+  - The calendar has its own `calendarTasks`, loaded by `loadCalendar()`. It does not share the Kanban list.
 - **Escaping is mandatory.** Rendering builds `innerHTML` from template strings, so every server-supplied value must be wrapped with the helpers at the top of the inline script:
   - `esc()` for text and attribute values.
   - `jsArg()` for values inside inline `onclick="fn(...)"` (HTML escaping alone is undone by the browser before the JS runs).

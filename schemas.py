@@ -209,7 +209,7 @@ class CommentResponse(BaseModel):
     task_id: int
     content: str
     created_at: datetime
-    user: UserResponse
+    user: Optional[UserResponse] = None   # None once the author is deleted
     class Config:
         from_attributes = True
 
@@ -220,7 +220,7 @@ class AttachmentResponse(BaseModel):
     filename: str
     file_size: int
     uploaded_at: datetime
-    user: UserResponse
+    user: Optional[UserResponse] = None   # None once the author is deleted
     class Config:
         from_attributes = True
 
@@ -293,7 +293,7 @@ class ActivityLogResponse(BaseModel):
     action: str
     details: Optional[str] = None
     timestamp: datetime
-    user: UserResponse
+    user: Optional[UserResponse] = None   # None once the author is deleted
     task_id: Optional[int] = None
     class Config:
         from_attributes = True

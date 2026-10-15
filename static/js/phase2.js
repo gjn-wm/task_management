@@ -162,7 +162,8 @@ function populateSprintDropdowns() {
         if (!el) return;
         const cur = el.value;
         const isBulk = id === 'bulk-sprint-select';
-        el.innerHTML = isBulk ? '<option value="">Add to sprint...</option>' : '<option value="">No sprint</option>';
+        el.innerHTML = isBulk ? '<option value="">Add to sprint...</option><option value="none">No sprint</option>'
+                              : '<option value="">No sprint</option>';
         sprintsList.forEach(s => {
             el.innerHTML += `<option value="${s.id}">${esc(s.name)} (${esc(s.status)})</option>`;
         });
@@ -337,7 +338,7 @@ function filterBulkAssigneesBySkill() {
     if (!select || typeof teamMembers === 'undefined') return;
 
     const cur = select.value;
-    select.innerHTML = '<option value="">Assign to...</option><option value="">Unassign</option>';
+    select.innerHTML = '<option value="">Assign to...</option><option value="none">Unassign</option>';
     teamMembers.forEach(u => {
         if (u.role === 'Viewer') return;
         const skills = parseUserSkills(u);

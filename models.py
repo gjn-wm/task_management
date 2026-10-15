@@ -26,9 +26,11 @@ class User(Base):
     # Relationships
     tasks = relationship("Task", back_populates="assignee")
     led_projects = relationship("Project", back_populates="lead")
-    comments = relationship("Comment", back_populates="user", cascade="all, delete-orphan")
-    attachments = relationship("Attachment", back_populates="user", cascade="all, delete-orphan")
-    activity_logs = relationship("ActivityLog", back_populates="user", cascade="all, delete-orphan")
+    # A user's comments, uploads and activity outlive the account: the database
+    # sets user_id to NULL (ON DELETE SET NULL) and the UI shows "Deleted user".
+    comments = relationship("Comment", back_populates="user", passive_deletes=True)
+    attachments = relationship("Attachment", back_populates="user", passive_deletes=True)
+    activity_logs = relationship("ActivityLog", back_populates="user", passive_deletes=True)
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
 
 class Project(Base):
@@ -113,7 +115,8 @@ class Task(Base):
     subtasks = relationship("Subtask", back_populates="task", cascade="all, delete-orphan", order_by="Subtask.sort_order")
     comments = relationship("Comment", back_populates="task", cascade="all, delete-orphan")
     attachments = relationship("Attachment", back_populates="task", cascade="all, delete-orphan")
-    activity_logs = relationship("ActivityLog", back_populates="task", cascade="all, delete-orphan")
+    # History of a deleted task is kept (task_id -> NULL), like any other audit entry.
+    activity_logs = relationship("ActivityLog", back_populates="task", passive_deletes=True)
     notifications = relationship("Notification", back_populates="task", cascade="all, delete-orphan")
 
 class Subtask(Base):
@@ -133,7 +136,7 @@ class Comment(Base):
 
     id = Column(Integer, primary_key=True)
     task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     content = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -146,7 +149,7 @@ class Attachment(Base):
 
     id = Column(Integer, primary_key=True)
     task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     filename = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
     file_size = Column(Integer, nullable=False)
@@ -160,8 +163,8 @@ class ActivityLog(Base):
     __tablename__ = "activity_logs"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    task_id = Column(Integer, ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)
     action = Column(String, nullable=False)
     details = Column(String, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)

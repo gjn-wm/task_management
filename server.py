@@ -257,6 +257,10 @@ def filter_tasks_for_user(query, user: models.User):
         )
     return query
 
+def utc_to_local_date(naive_utc: datetime):
+    """Local calendar date of a naive-UTC timestamp (how every DateTime column is stored)."""
+    return naive_utc.replace(tzinfo=timezone.utc).astimezone().date()
+
 def apply_task_status(task: models.Task, new_status: str):
     task.status = new_status
     if new_status == "Done":
@@ -510,6 +514,39 @@ def delete_user(
     return {"status": "success", "message": f"User {username} deleted"}
 
 # --- Task Routes ---
+def remove_attachment_files(paths):
+    """Delete attachment files after their rows are gone (task deletion cascades the rows only)."""
+    uploads_dir = os.path.realpath("uploads")
+    for path in paths:
+        real = os.path.realpath(path)
+        if real.startswith(uploads_dir + os.sep) and os.path.isfile(real):
+            try:
+                os.remove(real)
+            except OSError as e:
+                print(f"Could not remove attachment file {path}: {e}", flush=True)
+
+
+def apply_updates(obj, update_in, fields, nullable=()):
+    """Copy the fields the client actually sent.
+
+    exclude_unset distinguishes "not sent" (leave alone) from an explicit null,
+    which clears the fields listed in `nullable` (assignee, due date, ...).
+    A null for a required field is ignored rather than written.
+    Returns the names of the fields that were applied.
+    """
+    sent = update_in.model_dump(exclude_unset=True)
+    applied = []
+    for field in fields:
+        if field not in sent:
+            continue
+        value = sent[field]
+        if value is None and field not in nullable:
+            continue
+        setattr(obj, field, value)
+        applied.append(field)
+    return applied
+
+
 def check_refs(db: Session, *, assignee_id=None, project_id=None, sprint_id=None, label_ids=None, lead_id=None):
     """400 for ids that do not exist, instead of a foreign-key 500 or a silent drop."""
     for model, value, label in ((models.User, assignee_id, "Assignee"), (models.User, lead_id, "Project lead"),
@@ -552,8 +589,9 @@ def get_tasks(
             raise HTTPException(status_code=403, detail="Developers can only view their own or unassigned tasks.")
         query = query.filter(models.Task.assignee_id == assignee_id)
     if search:
+        pattern = "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         query = query.filter(
-            models.Task.title.like(f"%{search}%") | models.Task.description.like(f"%{search}%")
+            models.Task.title.ilike(pattern, escape="\\") | models.Task.description.ilike(pattern, escape="\\")
         )
         
     return query.order_by(models.Task.created_at.desc()).all()
@@ -628,25 +666,24 @@ def update_task(
     check_refs(db, assignee_id=task_in.assignee_id, project_id=task_in.project_id,
                sprint_id=task_in.sprint_id, label_ids=task_in.label_ids)
 
-    fields_to_update = ["title", "description", "priority", "status", "category", "due_date", "estimated_hours", "actual_hours", "assignee_id", "project_id", "sprint_id"]
-    for field in fields_to_update:
-        val = getattr(task_in, field)
-        if val is not None:
-            if field == "status":
-                if task.status != val:
-                    log_activity(db, current_user.id, "Status Change", f"Moved task to '{val}'", task.id)
-                apply_task_status(task, val)
-            else:
-                setattr(task, field, val)
-            
+    old_status = task.status
+    apply_updates(task, task_in,
+                  ["title", "description", "priority", "category", "due_date", "estimated_hours",
+                   "actual_hours", "assignee_id", "project_id", "sprint_id"],
+                  nullable=("due_date", "assignee_id", "project_id", "sprint_id"))
+    if task_in.status is not None and task_in.status != old_status:
+        apply_task_status(task, task_in.status)
+
     if task_in.label_ids is not None:
         labels = db.query(models.Label).filter(models.Label.id.in_(task_in.label_ids)).all()
         task.labels = labels
         
     db.commit()
     db.refresh(task)
-    
-    log_activity(db, current_user.id, "Update Task", f"Updated task details", task.id)
+
+    if task.status != old_status:
+        log_activity(db, current_user.id, "Status Change", f"Moved task to '{task.status}'", task.id)
+    log_activity(db, current_user.id, "Update Task", "Updated task details", task.id)
     return task
 
 @app.patch("/api/tasks/{task_id}/status", response_model=schemas.TaskResponse)
@@ -685,8 +722,10 @@ def delete_task(
         raise HTTPException(status_code=404, detail="Task not found")
         
     title = task.title
+    file_paths = [a.file_path for a in task.attachments]
     db.delete(task)
     db.commit()
+    remove_attachment_files(file_paths)
     
     log_activity(db, current_user.id, "Delete Task", f"Deleted task: {title}")
     return {"status": "success", "message": f"Task '{title}' deleted"}
@@ -717,10 +756,12 @@ def bulk_task_action(
     action = bulk_in.action
 
     if action == "delete":
+        file_paths = [a.file_path for task in tasks for a in task.attachments]
         for task in tasks:
             db.delete(task)
             updated += 1
         db.commit()
+        remove_attachment_files(file_paths)
         log_activity(db, current_user.id, "Bulk Delete", f"Deleted {updated} tasks")
         return {"status": "success", "updated": updated}
 
@@ -802,10 +843,7 @@ def update_project(
         raise HTTPException(status_code=404, detail="Project not found")
     check_refs(db, lead_id=project_in.lead_id)
 
-    for field in ["name", "description", "status", "lead_id"]:
-        val = getattr(project_in, field)
-        if val is not None:
-            setattr(project, field, val)
+    apply_updates(project, project_in, ["name", "description", "status", "lead_id"], nullable=("lead_id",))
 
     db.commit()
     db.refresh(project)
@@ -965,10 +1003,8 @@ def update_sprint(
     if end < start:
         raise HTTPException(status_code=400, detail="end_date must be on or after start_date")
 
-    for field in ["name", "project_id", "start_date", "end_date", "goal", "status"]:
-        val = getattr(sprint_in, field)
-        if val is not None:
-            setattr(sprint, field, val)
+    apply_updates(sprint, sprint_in, ["name", "project_id", "start_date", "end_date", "goal", "status"],
+                  nullable=("project_id",))
 
     db.commit()
     db.refresh(sprint)
@@ -1025,7 +1061,7 @@ def get_sprint_burndown(
         for task in tasks:
             if task.status != "Done":
                 remaining += 1
-            elif task.completed_at and task.completed_at.date() > current:
+            elif task.completed_at and utc_to_local_date(task.completed_at) > current:
                 remaining += 1
         actual_remaining.append(remaining)
         ideal_remaining.append(round(total_scope * (1 - day_index / day_span), 1))
@@ -1062,6 +1098,9 @@ def unread_notification_count(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
+    # The badge is what polls; without this, new overdue/due-today alerts only
+    # appeared once someone opened the list.
+    sync_due_notifications(db, current_user)
     count = db.query(models.Notification).filter(
         models.Notification.user_id == current_user.id,
         models.Notification.is_read == False
@@ -1379,6 +1418,8 @@ def get_analytics(
     # Completed this week (Mon-Sun)
     week_start = datetime.now() - timedelta(days=datetime.now().weekday())
     week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    # completed_at is naive UTC; express the local week start the same way.
+    week_start = week_start.astimezone(timezone.utc).replace(tzinfo=None)
     completed_this_week = 0
     for t in tasks:
         if t.status == "Done" and t.completed_at and t.completed_at >= week_start:
@@ -1431,8 +1472,8 @@ def get_analytics(
                 
         recent_logs.append({
             "id": l.id,
-            "username": l.user.username,
-            "full_name": l.user.full_name,
+            "username": l.user.username if l.user else "Deleted user",
+            "full_name": l.user.full_name if l.user else None,
             "action": l.action,
             "details": l.details,
             "task_id": l.task_id,
@@ -1941,7 +1982,7 @@ def _time_test_busy_error():
 def run_time_test(
     req: schemas.TimeTestRequest,
     background_tasks: BackgroundTasks,
-    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN, auth.ROLE_MANAGER]))
+    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN]))
 ):
     machine = (req.machine or "zk").strip().lower()
     if machine not in TIME_TEST_MACHINES:
@@ -2002,7 +2043,7 @@ def run_time_test(
 def restore_machine_time(
     req: schemas.TimeRestoreRequest,
     background_tasks: BackgroundTasks,
-    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN, auth.ROLE_MANAGER]))
+    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN]))
 ):
     """Manually put a machine back on the correct time."""
     machine = (req.machine or "").strip().lower()
@@ -2024,7 +2065,7 @@ def restore_machine_time(
 
 @app.get("/api/admin/test-time/active")
 def get_active_time_test(
-    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN, auth.ROLE_MANAGER]))
+    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN]))
 ):
     pending = _load_time_test_state()
     return {
@@ -2036,7 +2077,7 @@ def get_active_time_test(
 @app.get("/api/admin/test-time/logs/{task_id}")
 def get_time_test_logs(
     task_id: str,
-    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN, auth.ROLE_MANAGER]))
+    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN]))
 ):
     job = TIME_TEST_JOBS.get(task_id)
     if job is None:
@@ -2052,7 +2093,7 @@ def get_time_test_logs(
 @app.post("/api/admin/test-voice")
 def run_voice_test(
     req: schemas.VoiceTestRequest,
-    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN, auth.ROLE_MANAGER]))
+    admin_user: models.User = Depends(auth.check_permission([auth.ROLE_ADMIN]))
 ):
     try:
         with Managed() as conn:

@@ -39,7 +39,8 @@ function populateProjectDropdowns() {
         const isBulk = id === 'bulk-project-select';
         const isEditor = id === 'editor-project';
         el.innerHTML = isBulk || isEditor
-            ? `<option value="">${isBulk ? 'Move to project...' : 'No project'}</option>`
+            ? (isBulk ? '<option value="">Move to project...</option><option value="none">No project</option>'
+                      : '<option value="">No project</option>')
             : '<option value="">All Projects</option>';
         projectsList.forEach(p => {
             el.innerHTML += `<option value="${p.id}">${esc(p.name)}</option>`;
@@ -61,7 +62,7 @@ function populateProjectDropdowns() {
     const bulkAssignee = document.getElementById('bulk-assignee-select');
     if (bulkAssignee && typeof teamMembers !== 'undefined') {
         const cur = bulkAssignee.value;
-        bulkAssignee.innerHTML = '<option value="">Assign to...</option><option value="">Unassign</option>';
+        bulkAssignee.innerHTML = '<option value="">Assign to...</option><option value="none">Unassign</option>';
         teamMembers.forEach(u => {
             if (u.role === 'Viewer') return;
             const name = u.full_name || u.username;
@@ -183,6 +184,18 @@ async function handleSaveProject(e) {
     }
 }
 
+let allTasksQuickFilter = null;
+let allTasksRequestSeq = 0;
+
+function applyQuickFilter(tasks) {
+    if (allTasksQuickFilter === 'pending') return tasks.filter(t => t.status !== 'Done');
+    if (allTasksQuickFilter === 'overdue') {
+        const today = localDateStr(new Date());
+        return tasks.filter(t => t.status !== 'Done' && t.due_date && t.due_date < today);
+    }
+    return tasks;
+}
+
 function setAllTasksViewMode(mode) {
     allTasksViewMode = mode;
     document.getElementById('all-tasks-cards-btn')?.classList.toggle('active', mode === 'cards');
@@ -284,8 +297,17 @@ async function executeBulkAction(action) {
         action
     };
 
+    // "" is the "choose..." placeholder and "none" an explicit "clear". They used
+    // to share "", so pressing Assign/Move without choosing cleared every task.
+    const pickId = (selectId, what) => {
+        const v = document.getElementById(selectId)?.value || '';
+        if (v === '') { showToast(`Choose ${what} first`, 'warning'); return undefined; }
+        return v === 'none' ? null : parseInt(v, 10);
+    };
+
     if (action === 'assign') {
-        payload.assignee_id = parseInt(document.getElementById('bulk-assignee-select').value) || null;
+        payload.assignee_id = pickId('bulk-assignee-select', 'a person (or Unassign)');
+        if (payload.assignee_id === undefined) return;
     } else if (action === 'status') {
         payload.status = document.getElementById('bulk-status-select').value;
         if (!payload.status) return showToast('Select a status', 'warning');
@@ -293,11 +315,11 @@ async function executeBulkAction(action) {
         payload.priority = document.getElementById('bulk-priority-select').value;
         if (!payload.priority) return showToast('Select a priority', 'warning');
     } else if (action === 'project') {
-        const pid = document.getElementById('bulk-project-select').value;
-        payload.project_id = pid ? parseInt(pid) : null;
+        payload.project_id = pickId('bulk-project-select', 'a project (or No project)');
+        if (payload.project_id === undefined) return;
     } else if (action === 'sprint') {
-        const sid = document.getElementById('bulk-sprint-select')?.value;
-        payload.sprint_id = sid ? parseInt(sid) : null;
+        payload.sprint_id = pickId('bulk-sprint-select', 'a sprint (or No sprint)');
+        if (payload.sprint_id === undefined) return;
     } else if (action === 'delete') {
         if (!confirm(`Delete ${selectedTaskIds.size} tasks permanently?`)) return;
     }
@@ -470,7 +492,13 @@ function initUpgradeFeatures() {
     };
 
     const origLoadAllTasks = loadAllTasks;
-    loadAllTasks = async function(page = 1) {
+    // opts.quick: 'pending' | 'overdue' | null, set by the dashboard KPI cards.
+    //   Kept across silent refreshes; any filter the user touches clears it.
+    // opts.silent: background refresh - keep the page and the bulk selection.
+    loadAllTasks = async function(page = 1, opts = {}) {
+        if (opts.quick !== undefined) allTasksQuickFilter = opts.quick;
+        else if (!opts.silent) allTasksQuickFilter = null;
+        const requestId = ++allTasksRequestSeq;
         const search = document.getElementById('all-tasks-filter-search').value;
         const priority = document.getElementById('all-tasks-filter-priority').value;
         const status = document.getElementById('all-tasks-filter-status').value;
@@ -486,9 +514,20 @@ function initUpgradeFeatures() {
 
         const url = '/api/tasks' + (queryParams.length ? `?${queryParams.join('&')}` : '');
         try {
-            allTasksList = await apiFetch(url);
-            allTasksCurrentPage = 1;
-            selectedTaskIds.clear();
+            const tasks = await apiFetch(url);
+            // Typing in the search box fires one request per keystroke; drop
+            // answers that arrive after a newer request was made.
+            if (requestId !== allTasksRequestSeq || !tasks) return;
+            allTasksList = applyQuickFilter(tasks);
+            if (opts.silent) {
+                const present = new Set(allTasksList.map(t => t.id));
+                [...selectedTaskIds].forEach(id => { if (!present.has(id)) selectedTaskIds.delete(id); });
+                const pages = Math.max(1, Math.ceil(allTasksList.length / allTasksPageSize));
+                allTasksCurrentPage = Math.min(allTasksCurrentPage, pages);
+            } else {
+                allTasksCurrentPage = 1;
+                selectedTaskIds.clear();
+            }
             updateBulkActionBar();
             if (allTasksViewMode === 'table') renderAllTasksTable();
             else renderAllTasks();
@@ -506,9 +545,10 @@ function initUpgradeFeatures() {
 
     const origOpenTaskDetails = openTaskDetails;
     openTaskDetails = async function(taskId) {
-        await origOpenTaskDetails(taskId);
+        // Reuse the task the original already fetched (it used to be fetched twice).
+        const task = await origOpenTaskDetails(taskId);
+        if (!task) return null;
         try {
-            const task = await apiFetch(`/api/tasks/${taskId}`);
             renderSubtasks(task.subtasks);
             const projectEl = document.getElementById('detail-project-val');
             if (projectEl) {
@@ -517,6 +557,7 @@ function initUpgradeFeatures() {
         } catch (err) {
             console.error(err);
         }
+        return task;
     };
 
     const origSwitchDetailTab = switchDetailTab;
@@ -533,20 +574,16 @@ function initUpgradeFeatures() {
 
     const origOpenTaskEditor = openTaskEditor;
     openTaskEditor = async function(taskId = null) {
-        await origOpenTaskEditor(taskId);
+        const task = await origOpenTaskEditor(taskId);
         populateProjectDropdowns();
         if (typeof populateSprintDropdowns === 'function') populateSprintDropdowns();
-        if (taskId) {
-            try {
-                const task = await apiFetch(`/api/tasks/${taskId}`);
-                const projEl = document.getElementById('editor-project');
-                if (projEl) projEl.value = task.project_id || '';
-                const sprintEl = document.getElementById('editor-sprint');
-                if (sprintEl) sprintEl.value = task.sprint_id || '';
-            } catch (err) {
-                console.error(err);
-            }
+        if (task) {
+            const projEl = document.getElementById('editor-project');
+            if (projEl) projEl.value = task.project_id || '';
+            const sprintEl = document.getElementById('editor-sprint');
+            if (sprintEl) sprintEl.value = task.sprint_id || '';
         }
+        return task;
     };
 
     const origHandleSaveTask = handleSaveTask;
@@ -591,7 +628,7 @@ function initUpgradeFeatures() {
                 showToast(taskId ? 'Task details updated' : 'Task created successfully', 'success');
                 if (activeView === 'kanban') loadTasks();
                 else if (activeView === 'all-tasks') loadAllTasks();
-                else if (activeView === 'calendar') renderCalendar();
+                else if (activeView === 'calendar') loadCalendar();
             }
         } catch (err) {
             console.error(err);

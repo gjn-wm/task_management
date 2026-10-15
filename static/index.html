@@ -676,7 +676,7 @@
             <div class="panel-table-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
                 <div>
                     <h3>Database Backup Console</h3>
-                    <p style="font-size: 13px; color: var(--text-secondary);">Manage system SQLite databases. Backups are saved locally inside backups/ folder.</p>
+                    <p style="font-size: 13px; color: var(--text-secondary);">Create, download and delete PostgreSQL backups (pg_dump). Files are saved on the server in the backups/ folder.</p>
                 </div>
                 <button class="primary-btn" onclick="triggerBackup()">
                     <i data-lucide="hard-drive"></i> Backup Database Now
@@ -684,7 +684,7 @@
             </div>
 
             <div class="panel-table-card">
-                <h3>Available SQLite Backups</h3>
+                <h3>Available Backups</h3>
                 <div style="overflow-x: auto;">
                     <table>
                         <thead>
@@ -796,7 +796,7 @@
                     <!-- Left main section -->
                     <div class="task-detail-main">
                         <div class="tabs-header">
-                            <button class="tab-btn active" onclick="switchDetailTab('desc')">Description</button>
+                            <button class="tab-btn active" onclick="switchDetailTab('desc')" id="tab-desc-btn">Description</button>
                             <button class="tab-btn" onclick="switchDetailTab('subtasks')" id="tab-subtasks-btn">Checklist (0)</button>
                             <button class="tab-btn" onclick="switchDetailTab('comments')" id="tab-comments-btn">Comments (0)</button>
                             <button class="tab-btn" onclick="switchDetailTab('attachments')" id="tab-attachments-btn">Attachments (0)</button>
@@ -1198,6 +1198,21 @@
             return DOMPurify.sanitize(marked.parse(String(text ?? '')));
         }
 
+        // Server timestamps are naive UTC without a zone suffix; parsing them
+        // bare treats them as local time (5½ h off in IST).
+        function parseServerDate(value) {
+            const s = String(value ?? '');
+            return new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(s) ? s : s + 'Z');
+        }
+        // Local calendar date as YYYY-MM-DD. toISOString() would give the UTC
+        // date, which is the previous day for the first 5½ h of an IST day.
+        function localDateStr(d) {
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+        function userLabel(user) {
+            return user ? (user.full_name || user.username) : 'Deleted user';
+        }
+
         // State Variables
         let currentUser = null;
 
@@ -1246,12 +1261,16 @@
             // Validate Session
             await checkUserSession();
 
-            // Auto refresh workspace data every 60 seconds (Live updates on Wi-Fi network)
+            // Auto refresh workspace data every 60 seconds, and as soon as a
+            // backgrounded tab becomes visible again.
             setInterval(async () => {
                 if (currentUser) {
                     await refreshDataSilently();
                 }
             }, 60000);
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden && currentUser) refreshDataSilently();
+            });
         });
 
         // Register Service Worker
@@ -1337,8 +1356,9 @@
 
         // Auto-Disappearing Toast System
         function showToast(message, type = 'info', force = false) {
-            // Suppress toast notifications for Viewers unless forced (e.g. login/critical errors)
-            if (currentUser && currentUser.role === 'Viewer' && !force) {
+            // Viewers only skip routine success/info toasts; errors and warnings
+            // are always shown (they used to be hidden too).
+            if (currentUser && currentUser.role === 'Viewer' && !force && (type === 'success' || type === 'info')) {
                 return;
             }
 
@@ -1552,47 +1572,22 @@
         }
 
         // Silent refresh in the background (used by live network sync)
+        // Background refresh. It calls the same loaders the views use (the
+        // patched ones), so every filter - including project - is kept; it used
+        // to rebuild the Kanban query itself and dropped the project filter.
         async function refreshDataSilently() {
+            // Skip in background tabs and while a card is being dragged.
+            if (document.hidden || draggedCard) return;
             try {
-                // Fetch latest lists
-                teamMembers = await apiFetch('/api/users');
-                labelsList = await apiFetch('/api/labels');
-                
-                // Get tasks
-                const search = document.getElementById('filter-search').value;
-                const priority = document.getElementById('filter-priority').value;
-                const category = document.getElementById('filter-category').value;
-                const assigneeId = document.getElementById('filter-assignee').value;
+                teamMembers = (await apiFetch('/api/users')) || teamMembers;
+                labelsList = (await apiFetch('/api/labels')) || labelsList;
 
-                let queryParams = [];
-                if (search) queryParams.push(`search=${encodeURIComponent(search)}`);
-                if (priority) queryParams.push(`priority=${priority}`);
-                if (category) queryParams.push(`category=${category}`);
-                if (assigneeId) queryParams.push(`assignee_id=${assigneeId}`);
-
-                const url = '/api/tasks' + (queryParams.length ? `?${queryParams.join('&')}` : '');
-                tasksList = await apiFetch(url);
-
-                if (activeView === 'kanban') {
-                    if (currentUser.role === 'Viewer') {
-                        renderViewerTaskList();
-                    } else {
-                        renderKanbanBoard();
-                    }
-                } else if (activeView === 'dashboard') {
-                    // Update dashboard numbers
-                    const stats = await apiFetch('/api/analytics');
-                    if (stats) {
-                        document.getElementById('kpi-total').textContent = stats.summary.total;
-                        document.getElementById('kpi-completed').textContent = stats.summary.completed;
-                        document.getElementById('kpi-pending').textContent = stats.summary.pending;
-                        document.getElementById('kpi-overdue').textContent = stats.summary.overdue;
-                        renderActivityFeed(stats.recent_logs);
-                        renderDashboardCharts(stats);
-                    }
-                } else if (activeView === 'calendar') {
-                    renderCalendar();
-                }
+                if (activeView === 'kanban') await loadTasks();
+                else if (activeView === 'all-tasks') await loadAllTasks(1, { silent: true });
+                else if (activeView === 'dashboard') await loadDashboardData();
+                else if (activeView === 'calendar') await loadCalendar();
+                else if (activeView === 'projects' && typeof loadProjectsPanel === 'function') await loadProjectsPanel();
+                else if (activeView === 'sprints' && typeof loadSprintsPanel === 'function') await loadSprintsPanel();
             } catch (err) {
                 console.warn("Silent sync failed", err);
             }
@@ -1650,7 +1645,7 @@
             } else if (viewName === 'calendar') {
                 titleEl.textContent = 'Deadlines Calendar';
                 subtitleEl.textContent = 'Track due dates on a monthly calendar';
-                renderCalendar();
+                loadCalendar();
             } else if (viewName === 'users') {
                 titleEl.textContent = 'Team Members';
                 subtitleEl.textContent = 'Manage users and system roles';
@@ -1716,16 +1711,16 @@
             const today = new Date();
             today.setHours(0,0,0,0);
             
-            const due = new Date(dueDate);
-            due.setHours(0,0,0,0);
+            // Parse YYYY-MM-DD as a local date (new Date('YYYY-MM-DD') is UTC midnight).
+            const [dy, dm, dd] = dueDate.split('-').map(Number);
+            const due = new Date(dy, dm - 1, dd);
             
-            const timeDiff = due.getTime() - today.getTime();
-            const daysDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
+            const daysDiff = Math.round((due.getTime() - today.getTime()) / (1000 * 3600 * 24));
 
             if (daysDiff === 0) {
                 return `<span class="meta-item due-today"><i data-lucide="clock"></i> Due Today</span>`;
             } else if (daysDiff < 0) {
-                return `<span class="meta-item overdue"><i data-lucide="alert-triangle"></i> Overdue by ${Math.abs(daysDiff)} days</span>`;
+                return `<span class="meta-item overdue"><i data-lucide="alert-triangle"></i> Overdue by ${Math.abs(daysDiff)} day${Math.abs(daysDiff) === 1 ? '' : 's'}</span>`;
             } else if (daysDiff === 1) {
                 return `<span style="color: var(--signal-amber); font-weight: 500;"><i data-lucide="clock" style="display:inline-block; width:12px; vertical-align:middle; margin-right:4px;"></i> Due Tomorrow</span>`;
             } else {
@@ -1992,27 +1987,21 @@
             loadAllTasks();
         }
 
+        // Dashboard KPI cards. "Pending" means every task not Done (it used to
+        // show only Todo) and "Overdue" is filtered client-side (it used to show
+        // everything), matching how /api/analytics counts them.
         function viewAllTasksWithFilter(filterType) {
+            ['search', 'priority', 'status', 'category', 'project'].forEach(f => {
+                const el = document.getElementById(`all-tasks-filter-${f}`);
+                if (el) el.value = '';
+            });
+            if (filterType === 'completed') {
+                document.getElementById('all-tasks-filter-status').value = 'Done';
+            }
+            const quick = (filterType === 'pending' || filterType === 'overdue') ? filterType : null;
             switchView('all-tasks');
-            
-            setTimeout(() => {
-                document.getElementById('all-tasks-filter-search').value = '';
-                document.getElementById('all-tasks-filter-priority').value = '';
-                document.getElementById('all-tasks-filter-status').value = '';
-                document.getElementById('all-tasks-filter-category').value = '';
-
-                if (filterType === 'all') {
-                    // Show all tasks, no filter
-                } else if (filterType === 'completed') {
-                    document.getElementById('all-tasks-filter-status').value = 'Done';
-                } else if (filterType === 'pending') {
-                    document.getElementById('all-tasks-filter-status').value = 'Todo';
-                } else if (filterType === 'overdue') {
-                    // Will be filtered in JS after loading
-                }
-                
-                loadAllTasks();
-            }, 100);
+            loadAllTasks(1, { quick });
+            if (quick) showToast(quick === 'pending' ? 'Showing tasks that are not done' : 'Showing overdue tasks', 'info');
         }
 
         // HTML5 Drag and Drop Handlers
@@ -2043,7 +2032,11 @@
             const targetColumn = e.currentTarget.closest('.board-column');
             const newStatus = targetColumn.getAttribute('data-status');
 
-            if (!taskId || !newStatus) return;
+            // Ignore anything that is not one of our cards (dragged text, files),
+            // and drops back into the card's own column.
+            if (!/^\d+$/.test(taskId) || !newStatus) return;
+            const task = tasksList.find(t => String(t.id) === taskId);
+            if (task && task.status === newStatus) return;
 
             try {
                 const data = await apiFetch(`/api/tasks/${taskId}/status`, {
@@ -2076,7 +2069,9 @@
             document.querySelectorAll('#task-detail-modal .tab-content').forEach(c => c.classList.remove('active'));
 
             if (tab === 'desc') {
-                event.target.classList.add('active');
+                // Not event.target: this is also called from code (opening a task),
+                // where there is no click event and the old code threw.
+                document.getElementById('tab-desc-btn').classList.add('active');
                 document.getElementById('tab-desc').classList.add('active');
             } else if (tab === 'comments') {
                 document.getElementById('tab-comments-btn').classList.add('active');
@@ -2114,7 +2109,7 @@
                 document.getElementById('detail-due-val').textContent = task.due_date ? task.due_date : 'No Deadline';
                 document.getElementById('detail-hours-val').textContent = `${task.estimated_hours.toFixed(1)}h / ${task.actual_hours.toFixed(1)}h`;
                 
-                const createdDate = new Date(task.created_at + 'Z');
+                const createdDate = parseServerDate(task.created_at);
                 document.getElementById('detail-created-val').textContent = createdDate.toLocaleString();
 
                 const mdVal = task.description ? renderMarkdown(task.description) : '<p style="color: var(--text-muted); font-style: italic;">No description provided.</p>';
@@ -2148,8 +2143,10 @@
                 };
 
                 openModal('task-detail-modal');
+                return task;
             } catch (err) {
                 console.error("Failed to load task details", err);
+                return null;
             }
         }
 
@@ -2166,8 +2163,8 @@
             }
 
             comments.forEach(c => {
-                const createdDate = new Date(c.created_at + 'Z').toLocaleString();
-                const isOwner = currentUser.role === 'Admin' || c.user.id === currentUser.id;
+                const createdDate = parseServerDate(c.created_at).toLocaleString();
+                const isOwner = ['Admin', 'Manager'].includes(currentUser.role) || (c.user && c.user.id === currentUser.id);
                 
                 const deleteBtnHTML = (isOwner && currentUser.role !== 'Viewer')
                     ? `<button class="comment-delete" onclick="deleteComment(${c.id})" title="Delete Comment"><i data-lucide="trash"></i></button>`
@@ -2177,7 +2174,7 @@
                 commentDiv.className = 'comment-item';
                 commentDiv.innerHTML = `
                     <div class="comment-header">
-                        <span class="comment-author">${esc(c.user.full_name || c.user.username)}</span>
+                        <span class="comment-author">${esc(userLabel(c.user))}</span>
                         <div style="display:flex; gap: 8px; align-items:center;">
                             <span class="comment-date">${createdDate}</span>
                             ${deleteBtnHTML}
@@ -2241,8 +2238,8 @@
 
             attachments.forEach(att => {
                 const sizeKb = (att.file_size / 1024).toFixed(1);
-                const uploadedDate = new Date(att.uploaded_at + 'Z').toLocaleDateString();
-                const isOwner = currentUser.role === 'Admin' || att.user.id === currentUser.id;
+                const uploadedDate = parseServerDate(att.uploaded_at).toLocaleDateString();
+                const isOwner = ['Admin', 'Manager'].includes(currentUser.role) || (att.user && att.user.id === currentUser.id);
                 
                 const deleteBtnHTML = (isOwner && currentUser.role !== 'Viewer')
                     ? `<button class="comment-delete" onclick="deleteAttachment(${att.id})" title="Delete File"><i data-lucide="trash-2"></i></button>`
@@ -2255,7 +2252,7 @@
                         <i data-lucide="file-text"></i>
                         <div class="attachment-details">
                             <a href="/api/attachments/${att.id}" target="_blank" class="attachment-name" title="Download File">${esc(att.filename)}</a>
-                            <span class="attachment-meta">${sizeKb} KB • Uploaded by ${esc(att.user.full_name || att.user.username)} on ${uploadedDate}</span>
+                            <span class="attachment-meta">${sizeKb} KB • Uploaded by ${esc(userLabel(att.user))} on ${uploadedDate}</span>
                         </div>
                     </div>
                     ${deleteBtnHTML}
@@ -2317,7 +2314,9 @@
                 await apiFetch(`/api/tasks/${id}`, { method: 'DELETE' });
                 closeModal('task-detail-modal');
                 showToast("Task deleted successfully", "success");
-                loadTasks();
+                if (activeView === 'all-tasks') loadAllTasks(1, { silent: true });
+                else if (activeView === 'calendar') loadCalendar();
+                else loadTasks();
             } catch (err) {
                 console.error(err);
             }
@@ -2325,6 +2324,7 @@
 
         // Tasks Editor Add/Update Form
         async function openTaskEditor(taskId = null) {
+            let editorTask = null;
             const form = document.getElementById('task-editor-form');
             form.reset();
 
@@ -2354,9 +2354,10 @@
                             if (cb) cb.checked = true;
                         });
                     }
+                    editorTask = task;
                 } catch (err) {
                     console.error(err);
-                    return;
+                    return null;
                 }
             } else {
                 document.getElementById('editor-modal-title').textContent = 'Create New Task';
@@ -2365,6 +2366,7 @@
             }
 
             openModal('task-editor-modal');
+            return editorTask;
         }
 
         function renderLabelsCheckboxes() {
@@ -2424,7 +2426,7 @@
                     showToast(taskId ? "Task details updated" : "Task created successfully", "success");
                     
                     if (activeView === 'kanban') loadTasks();
-                    else if (activeView === 'calendar') renderCalendar();
+                    else if (activeView === 'calendar') loadCalendar();
                 }
             } catch (err) {
                 console.error(err);
@@ -2451,7 +2453,7 @@
                 badge.className = 'label-badge';
                 badge.style.backgroundColor = safeColor(lbl.color);
                 
-                const deleteBtnHTML = currentUser.role !== 'Viewer'
+                const deleteBtnHTML = ['Admin', 'Manager'].includes(currentUser.role)
                     ? `<button onclick="deleteLabel(${lbl.id}, ${jsArg(lbl.name)})" title="Delete label"><i data-lucide="x"></i></button>`
                     : '';
                 
@@ -2511,6 +2513,20 @@
         }
 
         // Monthly Calendar Deadlines Grid
+        // The calendar shows every task the user can see. It used to reuse the
+        // Kanban list, which is empty (or filtered) when /calendar is opened directly.
+        let calendarTasks = [];
+
+        async function loadCalendar() {
+            try {
+                const tasks = await apiFetch('/api/tasks');
+                if (tasks) calendarTasks = tasks;
+            } catch (err) {
+                console.error('Failed to load calendar tasks', err);
+            }
+            renderCalendar();
+        }
+
         function renderCalendar() {
             const container = document.getElementById('calendar-grid-container');
             const monthYearLabel = document.getElementById('calendar-month-year');
@@ -2538,36 +2554,32 @@
             const cells = [];
             
             for (let i = firstDayIndex - 1; i >= 0; i--) {
-                const dateVal = new Date(year, month - 1, prevLastDate - i);
-                dateVal.setMinutes(dateVal.getMinutes() - dateVal.getTimezoneOffset());
                 cells.push({
                     dayNum: prevLastDate - i,
                     isCurrentMonth: false,
-                    dateStr: dateVal.toISOString().substring(0, 10)
+                    dateStr: localDateStr(new Date(year, month - 1, prevLastDate - i))
                 });
             }
 
-            const todayStr = new Date().toISOString().substring(0, 10);
+            // Local date: toISOString() gave yesterday until 05:30 IST.
+            const todayStr = localDateStr(new Date());
             for (let i = 1; i <= lastDate; i++) {
-                const dateVal = new Date(year, month, i);
-                dateVal.setMinutes(dateVal.getMinutes() - dateVal.getTimezoneOffset());
+                const dateStr = localDateStr(new Date(year, month, i));
                 cells.push({
                     dayNum: i,
                     isCurrentMonth: true,
-                    isToday: dateVal.toISOString().substring(0, 10) === todayStr,
-                    dateStr: dateVal.toISOString().substring(0, 10)
+                    isToday: dateStr === todayStr,
+                    dateStr
                 });
             }
 
             const totalCellsNeeded = 42; 
             const nextDays = totalCellsNeeded - cells.length;
             for (let i = 1; i <= nextDays; i++) {
-                const dateVal = new Date(year, month + 1, i);
-                dateVal.setMinutes(dateVal.getMinutes() - dateVal.getTimezoneOffset());
                 cells.push({
                     dayNum: i,
                     isCurrentMonth: false,
-                    dateStr: dateVal.toISOString().substring(0, 10)
+                    dateStr: localDateStr(new Date(year, month + 1, i))
                 });
             }
 
@@ -2577,7 +2589,7 @@
                 
                 div.innerHTML = `<span class="calendar-day-num">${cell.dayNum}</span>`;
 
-                const tasksDue = tasksList.filter(t => t.due_date === cell.dateStr);
+                const tasksDue = calendarTasks.filter(t => t.due_date === cell.dateStr);
                 
                 const tasksDiv = document.createElement('div');
                 tasksDiv.className = 'calendar-tasks';
@@ -2647,8 +2659,9 @@
             }
 
             logs.forEach(l => {
-                const time = new Date(l.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const date = new Date(l.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' });
+                const when = parseServerDate(l.timestamp);
+                const time = when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const date = when.toLocaleDateString([], { month: 'short', day: 'numeric' });
                 
                 const taskLinkHTML = l.task_id 
                     ? `<a href="#" onclick="openTaskDetails(${l.task_id}); return false;" style="color:var(--accent-color); font-weight:600; text-decoration:none;">"${esc(l.task_title)}"</a>`

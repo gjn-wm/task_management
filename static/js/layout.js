@@ -148,6 +148,11 @@ function patchKanbanRendering() {
         if (isTouchDevice()) {
             document.querySelectorAll('.task-card').forEach(card => {
                 const taskId = card.getAttribute('data-id');
+                // Double-click does not exist on touch screens: a tap opens the task.
+                if (!card.dataset.tapBound) {
+                    card.dataset.tapBound = '1';
+                    card.addEventListener('click', () => openTaskDetails(parseInt(taskId, 10)));
+                }
                 if (!card.querySelector('.card-move-btn')) {
                     const btn = document.createElement('button');
                     btn.type = 'button';
