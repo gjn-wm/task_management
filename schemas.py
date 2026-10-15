@@ -1,14 +1,43 @@
-from pydantic import BaseModel
-from datetime import datetime
-from typing import List, Optional
+from pydantic import AfterValidator, BaseModel, Field, StringConstraints, model_validator
+from datetime import date, datetime
+from typing import Annotated, List, Literal, Optional
+
+# --- Input constraints ---
+# Applied to request models only. Response models stay plain `str` so rows
+# written before validation existed can still be read back.
+
+Role = Literal["Admin", "Manager", "Developer", "Viewer"]
+TaskStatus = Literal["Backlog", "Todo", "In Progress", "Review", "Testing", "Done"]
+Priority = Literal["Low", "Medium", "High", "Critical"]
+Category = Literal["Backend", "Frontend", "AI", "Database", "DevOps", "Testing", "Documentation", "Other"]
+ProjectStatus = Literal["Active", "On Hold", "Closed"]
+SprintStatus = Literal["Planned", "Active", "Completed"]
+
+
+def _real_date(value: str) -> str:
+    date.fromisoformat(value)   # rejects 2026-02-30 and similar
+    return value
+
+
+IsoDate = Annotated[str, StringConstraints(pattern=r"^\d{4}-\d{2}-\d{2}$"), AfterValidator(_real_date)]
+Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+ShortName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+LongText = Annotated[str, StringConstraints(max_length=20000)]
+Username = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=50,
+                                            pattern=r"^[A-Za-z0-9_.@-]+$")]
+Password = Annotated[str, StringConstraints(min_length=8, max_length=128)]
+SkillsText = Annotated[str, StringConstraints(max_length=500)]
+HexColor = Annotated[str, StringConstraints(pattern=r"^#[0-9a-fA-F]{6}$")]
+Hours = Annotated[float, Field(ge=0, le=10000)]
 
 # --- Label Schemas ---
 class LabelBase(BaseModel):
     name: str
     color: str
 
-class LabelCreate(LabelBase):
-    pass
+class LabelCreate(BaseModel):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
+    color: HexColor
 
 class LabelResponse(LabelBase):
     id: int
@@ -22,18 +51,28 @@ class UserBase(BaseModel):
     role: str = "Developer"
     skills: str = ""
 
-class UserCreate(UserBase):
-    password: str
+class LoginRequest(BaseModel):
+    # Deliberately unconstrained beyond length: existing accounts may predate
+    # the password rules, and a login must never be rejected for its shape.
+    username: Annotated[str, StringConstraints(max_length=100)]
+    password: Annotated[str, StringConstraints(max_length=128)]
+
+class UserCreate(BaseModel):
+    username: Username
+    password: Password
+    full_name: Optional[ShortName] = None
+    role: Role = "Developer"
+    skills: SkillsText = ""
 
 class UserUpdate(BaseModel):
-    full_name: Optional[str] = None
-    role: Optional[str] = None
-    password: Optional[str] = None
-    skills: Optional[str] = None
+    full_name: Optional[ShortName] = None
+    role: Optional[Role] = None
+    password: Optional[Password] = None
+    skills: Optional[SkillsText] = None
 
 class PasswordReset(BaseModel):
-    old_password: str
-    new_password: str
+    old_password: Annotated[str, StringConstraints(max_length=128)]
+    new_password: Password
 
 
 class UserResponse(UserBase):
@@ -60,13 +99,16 @@ class ProjectBase(BaseModel):
     status: str = "Active"
     lead_id: Optional[int] = None
 
-class ProjectCreate(ProjectBase):
-    pass
+class ProjectCreate(BaseModel):
+    name: ShortName
+    description: Optional[LongText] = ""
+    status: ProjectStatus = "Active"
+    lead_id: Optional[int] = None
 
 class ProjectUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    status: Optional[str] = None
+    name: Optional[ShortName] = None
+    description: Optional[LongText] = None
+    status: Optional[ProjectStatus] = None
     lead_id: Optional[int] = None
 
 class ProjectResponse(ProjectBase):
@@ -80,12 +122,12 @@ class ProjectResponse(ProjectBase):
 
 # --- Subtask Schemas ---
 class SubtaskCreate(BaseModel):
-    title: str
+    title: Title
 
 class SubtaskUpdate(BaseModel):
-    title: Optional[str] = None
+    title: Optional[Title] = None
     is_completed: Optional[bool] = None
-    sort_order: Optional[int] = None
+    sort_order: Optional[Annotated[int, Field(ge=0)]] = None
 
 class SubtaskResponse(BaseModel):
     id: int
@@ -99,11 +141,11 @@ class SubtaskResponse(BaseModel):
 
 # --- Bulk Task Schemas ---
 class BulkTaskAction(BaseModel):
-    task_ids: List[int]
-    action: str
+    task_ids: Annotated[List[int], Field(min_length=1, max_length=500)]
+    action: Literal["assign", "status", "priority", "project", "sprint", "delete"]
     assignee_id: Optional[int] = None
-    status: Optional[str] = None
-    priority: Optional[str] = None
+    status: Optional[TaskStatus] = None
+    priority: Optional[Priority] = None
     project_id: Optional[int] = None
     sprint_id: Optional[int] = None
 
@@ -116,16 +158,27 @@ class SprintBase(BaseModel):
     goal: Optional[str] = ""
     status: str = "Planned"
 
-class SprintCreate(SprintBase):
-    pass
+class SprintCreate(BaseModel):
+    name: ShortName
+    project_id: Optional[int] = None
+    start_date: IsoDate
+    end_date: IsoDate
+    goal: Optional[Annotated[str, StringConstraints(max_length=2000)]] = ""
+    status: SprintStatus = "Planned"
+
+    @model_validator(mode="after")
+    def _dates_in_order(self):
+        if self.end_date < self.start_date:
+            raise ValueError("end_date must be on or after start_date")
+        return self
 
 class SprintUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[ShortName] = None
     project_id: Optional[int] = None
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    goal: Optional[str] = None
-    status: Optional[str] = None
+    start_date: Optional[IsoDate] = None
+    end_date: Optional[IsoDate] = None
+    goal: Optional[Annotated[str, StringConstraints(max_length=2000)]] = None
+    status: Optional[SprintStatus] = None
 
 class SprintResponse(SprintBase):
     id: int
@@ -149,7 +202,7 @@ class NotificationResponse(BaseModel):
 
 # --- Comment Schemas ---
 class CommentCreate(BaseModel):
-    content: str
+    content: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=5000)]
 
 class CommentResponse(BaseModel):
     id: int
@@ -165,7 +218,6 @@ class AttachmentResponse(BaseModel):
     id: int
     task_id: int
     filename: str
-    file_path: str
     file_size: int
     uploaded_at: datetime
     user: UserResponse
@@ -183,25 +235,36 @@ class TaskBase(BaseModel):
     estimated_hours: float = 0.0
     actual_hours: float = 0.0
 
-class TaskCreate(TaskBase):
+class TaskCreate(BaseModel):
+    title: Title
+    description: Optional[LongText] = ""
+    priority: Priority = "Medium"
+    status: TaskStatus = "Backlog"
+    category: Category = "Other"
+    due_date: Optional[IsoDate] = None
+    estimated_hours: Hours = 0.0
+    actual_hours: Hours = 0.0
     assignee_id: Optional[int] = None
     project_id: Optional[int] = None
     sprint_id: Optional[int] = None
-    label_ids: Optional[List[int]] = []
+    label_ids: Optional[Annotated[List[int], Field(max_length=50)]] = []
 
 class TaskUpdate(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
-    priority: Optional[str] = None
-    status: Optional[str] = None
-    category: Optional[str] = None
-    due_date: Optional[str] = None
-    estimated_hours: Optional[float] = None
-    actual_hours: Optional[float] = None
+    title: Optional[Title] = None
+    description: Optional[LongText] = None
+    priority: Optional[Priority] = None
+    status: Optional[TaskStatus] = None
+    category: Optional[Category] = None
+    due_date: Optional[IsoDate] = None
+    estimated_hours: Optional[Hours] = None
+    actual_hours: Optional[Hours] = None
     assignee_id: Optional[int] = None
     project_id: Optional[int] = None
     sprint_id: Optional[int] = None
-    label_ids: Optional[List[int]] = None
+    label_ids: Optional[Annotated[List[int], Field(max_length=50)]] = None
+
+class TaskStatusUpdate(BaseModel):
+    status: TaskStatus
 
 class TaskResponse(TaskBase):
     id: int

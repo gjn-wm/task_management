@@ -96,6 +96,10 @@ def run_upgrade():
             print("  Adding completed_at to tasks...")
             conn.execute(text("ALTER TABLE tasks ADD COLUMN completed_at TIMESTAMP WITHOUT TIME ZONE"))
 
+        if table_exists(inspector, "users") and not column_exists(inspector, "users", "token_version"):
+            print("  Adding token_version to users...")
+            conn.execute(text("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"))
+
         if table_exists(inspector, "notifications"):
             print("  Removing duplicate notifications...")
             conn.execute(text("""

@@ -35,8 +35,8 @@ function renderSkillCheckboxes(containerId, selected = []) {
         const div = document.createElement('label');
         div.className = 'skill-checkbox-item';
         div.innerHTML = `
-            <input type="checkbox" value="${skill}" ${selected.includes(skill) ? 'checked' : ''}>
-            <span>${skill}</span>
+            <input type="checkbox" value="${esc(skill)}" ${selected.includes(skill) ? 'checked' : ''}>
+            <span>${esc(skill)}</span>
         `;
         el.appendChild(div);
     });
@@ -44,7 +44,7 @@ function renderSkillCheckboxes(containerId, selected = []) {
 
 function renderUserSkillTags(skills) {
     if (!skills || !skills.length) return '<span style="color:var(--text-muted);font-size:12px;">No skills</span>';
-    return skills.map(s => `<span class="skill-tag">${s}</span>`).join('');
+    return skills.map(s => `<span class="skill-tag">${esc(s)}</span>`).join('');
 }
 
 async function refreshNotificationCount() {
@@ -85,10 +85,10 @@ async function loadNotificationsList() {
         }
         notes.forEach(n => {
             const item = document.createElement('div');
-            item.className = `notification-item ${n.type} ${n.is_read ? '' : 'unread'}`;
+            item.className = `notification-item ${esc(n.type)} ${n.is_read ? '' : 'unread'}`;
             item.innerHTML = `
-                <div class="notification-item-title">${n.title}</div>
-                <div class="notification-item-msg">${n.message}</div>
+                <div class="notification-item-title">${esc(n.title)}</div>
+                <div class="notification-item-msg">${esc(n.message)}</div>
             `;
             item.addEventListener('click', async (e) => {
                 e.stopPropagation();
@@ -164,7 +164,7 @@ function populateSprintDropdowns() {
         const isBulk = id === 'bulk-sprint-select';
         el.innerHTML = isBulk ? '<option value="">Add to sprint...</option>' : '<option value="">No sprint</option>';
         sprintsList.forEach(s => {
-            el.innerHTML += `<option value="${s.id}">${s.name} (${s.status})</option>`;
+            el.innerHTML += `<option value="${s.id}">${esc(s.name)} (${esc(s.status)})</option>`;
         });
         if (cur) el.value = cur;
     });
@@ -196,12 +196,12 @@ function renderSprintsView() {
         card.className = `sprint-card ${selectedSprintId === sprint.id ? 'active' : ''}`;
         card.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-                <h4>${sprint.name}</h4>
-                <span class="project-status-pill project-status-${sprint.status.toLowerCase()}">${sprint.status}</span>
+                <h4>${esc(sprint.name)}</h4>
+                <span class="project-status-pill project-status-${esc(sprint.status.toLowerCase())}">${esc(sprint.status)}</span>
             </div>
-            <p style="font-size:12px;color:var(--text-secondary);margin-top:6px;">${sprint.goal || 'No sprint goal set.'}</p>
+            <p style="font-size:12px;color:var(--text-secondary);margin-top:6px;">${esc(sprint.goal || 'No sprint goal set.')}</p>
             <div class="sprint-meta">
-                <span>${sprint.start_date} → ${sprint.end_date}</span>
+                <span>${esc(sprint.start_date)} → ${esc(sprint.end_date)}</span>
                 <span>${sprint.completed_count}/${sprint.task_count} done</span>
             </div>
             <div class="sprint-progress-bar"><div class="sprint-progress-fill" style="width:${pct}%"></div></div>
@@ -288,7 +288,7 @@ function openSprintEditor(sprintId = null) {
     const projectSelect = document.getElementById('sprint-project-select');
     if (projectSelect && typeof projectsList !== 'undefined') {
         projectSelect.innerHTML = '<option value="">All projects</option>';
-        projectsList.forEach(p => { projectSelect.innerHTML += `<option value="${p.id}">${p.name}</option>`; });
+        projectsList.forEach(p => { projectSelect.innerHTML += `<option value="${p.id}">${esc(p.name)}</option>`; });
     }
 
     if (sprintId) {
@@ -344,7 +344,7 @@ function filterBulkAssigneesBySkill() {
         if (skillFilter && !skills.map(s => s.toLowerCase()).includes(skillFilter.toLowerCase())) return;
         const name = u.full_name || u.username;
         const skillHint = skills.length ? ` (${skills.slice(0, 2).join(', ')})` : '';
-        select.innerHTML += `<option value="${u.id}">${name}${skillHint}</option>`;
+        select.innerHTML += `<option value="${u.id}">${esc(name + skillHint)}</option>`;
     });
     if (cur) select.value = cur;
 }
@@ -495,14 +495,14 @@ function initPhase2Features() {
                 const skills = typeof parseUserSkills === 'function' ? parseUserSkills(u) : [];
                 const deleteBtnHTML = isSelf
                     ? '<span style="font-size:12px;color:var(--text-muted);font-style:italic;">Active Account</span>'
-                    : `<button class="secondary-btn logout-btn" onclick="deleteUser(${u.id}, '${u.username}')" style="padding:6px 12px;font-size:12px;"><i data-lucide="user-x" style="width:12px;height:12px;"></i> Delete</button>`;
+                    : `<button class="secondary-btn logout-btn" onclick="deleteUser(${u.id}, ${jsArg(u.username)})" style="padding:6px 12px;font-size:12px;"><i data-lucide="user-x" style="width:12px;height:12px;"></i> Delete</button>`;
                 const editSkillsBtn = currentUser.role === 'Admin'
                     ? `<button class="secondary-btn" style="padding:4px 8px;font-size:11px;margin-left:6px;" onclick="openEditUserSkills(${u.id})">Skills</button>`
                     : '';
                 row.innerHTML = `
-                    <td style="font-weight:600;">${u.full_name || 'N/A'}</td>
-                    <td>${u.username}</td>
-                    <td><span class="tag" style="background-color:${u.role === 'Admin' ? 'var(--error)' : u.role === 'Manager' ? 'var(--warning)' : u.role === 'Developer' ? 'var(--accent-color)' : 'var(--text-muted)'}">${u.role}</span></td>
+                    <td style="font-weight:600;">${esc(u.full_name || 'N/A')}</td>
+                    <td>${esc(u.username)}</td>
+                    <td><span class="tag" style="background-color:${u.role === 'Admin' ? 'var(--error)' : u.role === 'Manager' ? 'var(--warning)' : u.role === 'Developer' ? 'var(--accent-color)' : 'var(--text-muted)'}">${esc(u.role)}</span></td>
                     <td><div class="skill-tags">${typeof renderUserSkillTags === 'function' ? renderUserSkillTags(skills) : ''}</div></td>
                     <td>${deleteBtnHTML}${editSkillsBtn}</td>
                 `;

@@ -42,7 +42,7 @@ function populateProjectDropdowns() {
             ? `<option value="">${isBulk ? 'Move to project...' : 'No project'}</option>`
             : '<option value="">All Projects</option>';
         projectsList.forEach(p => {
-            el.innerHTML += `<option value="${p.id}">${p.name}</option>`;
+            el.innerHTML += `<option value="${p.id}">${esc(p.name)}</option>`;
         });
         if (current) el.value = current;
     });
@@ -53,7 +53,7 @@ function populateProjectDropdowns() {
         leadSelect.innerHTML = '<option value="">No lead</option>';
         teamMembers.forEach(u => {
             const name = u.full_name || u.username;
-            leadSelect.innerHTML += `<option value="${u.id}">${name}</option>`;
+            leadSelect.innerHTML += `<option value="${u.id}">${esc(name)}</option>`;
         });
         if (cur) leadSelect.value = cur;
     }
@@ -65,7 +65,7 @@ function populateProjectDropdowns() {
         teamMembers.forEach(u => {
             if (u.role === 'Viewer') return;
             const name = u.full_name || u.username;
-            bulkAssignee.innerHTML += `<option value="${u.id}">${name}</option>`;
+            bulkAssignee.innerHTML += `<option value="${u.id}">${esc(name)}</option>`;
         });
         if (cur) bulkAssignee.value = cur;
     }
@@ -100,14 +100,14 @@ function renderProjectsView() {
         const leadName = project.lead ? (project.lead.full_name || project.lead.username) : 'Unassigned';
         card.innerHTML = `
             <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
-                <h4>${project.name}</h4>
-                <span class="${projectStatusClass(project.status)}">${project.status}</span>
+                <h4>${esc(project.name)}</h4>
+                <span class="${esc(projectStatusClass(project.status))}">${esc(project.status)}</span>
             </div>
             <p style="font-size:13px; color:var(--text-secondary); margin-top:6px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">
-                ${project.description || 'No description.'}
+                ${esc(project.description || 'No description.')}
             </p>
             <div class="project-card-meta">
-                <span><i data-lucide="user" style="width:12px;height:12px;display:inline;vertical-align:middle;"></i> ${leadName}</span>
+                <span><i data-lucide="user" style="width:12px;height:12px;display:inline;vertical-align:middle;"></i> ${esc(leadName)}</span>
                 <span><i data-lucide="list-todo" style="width:12px;height:12px;display:inline;vertical-align:middle;"></i> ${project.task_count || 0} tasks</span>
             </div>
         `;
@@ -238,7 +238,7 @@ function renderAllTasksTable() {
     pageItems.forEach(task => {
         const tr = document.createElement('tr');
         if (selectedTaskIds.has(task.id)) tr.classList.add('selected');
-        const priClass = `pri-${task.priority.toLowerCase()}`;
+        const priClass = `pri-${esc(task.priority.toLowerCase())}`;
         const assigneeName = task.assignee ? (task.assignee.full_name || task.assignee.username) : 'Unassigned';
         const projectName = task.project ? task.project.name : '—';
         const deadlineHTML = getDeadlineProgressHTML(task.due_date, task.status);
@@ -248,12 +248,12 @@ function renderAllTasksTable() {
 
         tr.innerHTML = `
             <td>${checkCell}</td>
-            <td class="task-title-cell" onclick="openTaskDetails(${task.id})">${task.title}</td>
-            <td><span class="project-badge-inline">${projectName}</span></td>
-            <td><span class="tag cat-tag">${task.category}</span></td>
-            <td><span class="tag pri-tag ${priClass}">${task.priority}</span></td>
-            <td>${task.status}</td>
-            <td>${assigneeName}</td>
+            <td class="task-title-cell" onclick="openTaskDetails(${task.id})">${esc(task.title)}</td>
+            <td><span class="project-badge-inline">${esc(projectName)}</span></td>
+            <td><span class="tag cat-tag">${esc(task.category)}</span></td>
+            <td><span class="tag pri-tag ${priClass}">${esc(task.priority)}</span></td>
+            <td>${esc(task.status)}</td>
+            <td>${esc(assigneeName)}</td>
             <td>${deadlineHTML}</td>
             <td>
                 <button class="secondary-btn" style="padding:4px 8px;font-size:11px;" onclick="openTaskDetails(${task.id})">Open</button>
@@ -344,7 +344,7 @@ function renderSubtasks(subtasks) {
         row.innerHTML = `
             <input type="checkbox" ${st.is_completed ? 'checked' : ''} ${canEdit ? '' : 'disabled'}
                 onchange="toggleSubtaskComplete(${st.id}, this.checked)">
-            <span class="subtask-title">${st.title}</span>
+            <span class="subtask-title">${esc(st.title)}</span>
             ${canEdit ? `<button class="subtask-delete" onclick="deleteSubtask(${st.id})" title="Remove"><i data-lucide="x"></i></button>` : ''}
         `;
         container.appendChild(row);

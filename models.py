@@ -20,6 +20,8 @@ class User(Base):
     role = Column(String, default="Developer")
     full_name = Column(String, nullable=True)
     skills = Column(String, default="")
+    # Bumped to revoke every session the user has (see auth.revoke_sessions).
+    token_version = Column(Integer, nullable=False, default=0, server_default="0")
 
     # Relationships
     tasks = relationship("Task", back_populates="assignee")

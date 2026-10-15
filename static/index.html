@@ -18,6 +18,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- Marked.js for Markdown -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.17/dist/purify.min.js" integrity="sha384-P0JNneQf81HOl9VwNXK76cQ9VMD6Nfsnepxb0cCOg8+UzEdzgPHAPV4wVQrvYQSx" crossorigin="anonymous"></script>
     <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
@@ -1177,6 +1178,26 @@
 
     <!-- CLIENT LOGIC -->
     <script>
+        // --- Output encoding -------------------------------------------------
+        // Every server-supplied string (titles, names, comments, filenames, ...)
+        // that is placed into innerHTML must go through esc(). Values placed in
+        // an inline onclick go through jsArg(), because the browser decodes
+        // HTML entities before running the handler.
+        function esc(value) {
+            return String(value ?? '').replace(/[&<>"']/g, ch => (
+                { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+        }
+        function jsArg(value) {
+            return esc(JSON.stringify(String(value ?? '')));
+        }
+        // Colours end up in style attributes: only #rrggbb is allowed through.
+        function safeColor(value) {
+            return /^#[0-9a-fA-F]{6}$/.test(value || '') ? value : '#64748b';
+        }
+        function renderMarkdown(text) {
+            return DOMPurify.sanitize(marked.parse(String(text ?? '')));
+        }
+
         // State Variables
         let currentUser = null;
 
@@ -1274,14 +1295,15 @@
                 }
                 
                 if (response.status === 403) {
-                    const data = await response.json();
-                    showToast(data.detail || "Forbidden permission action", "error", true);
+                    const data = await response.json().catch(() => ({}));
+                    showToast(apiErrorText(data, response.status), "error", true);
                     throw new Error("Forbidden");
                 }
 
                 if (!response.ok) {
-                    const data = await response.json();
-                    throw new Error(data.detail || "API request failed");
+                    // Not every error body is JSON (e.g. a proxy error page).
+                    const data = await response.json().catch(() => ({}));
+                    throw new Error(apiErrorText(data, response.status));
                 }
 
                 const contentType = response.headers.get("content-type");
@@ -1296,6 +1318,21 @@
                 }
                 throw err;
             }
+        }
+
+        // FastAPI errors carry `detail` as a string, an object with `message`,
+        // or (for validation failures) a list of {loc, msg} entries.
+        function apiErrorText(data, statusCode) {
+            const d = data && data.detail;
+            if (typeof d === 'string' && d) return d;
+            if (Array.isArray(d) && d.length) {
+                return d.map(e => {
+                    const field = Array.isArray(e.loc) ? e.loc.filter(p => p !== 'body').join('.') : '';
+                    return field ? `${field}: ${e.msg}` : e.msg;
+                }).join('; ');
+            }
+            if (d && typeof d === 'object' && d.message) return d.message;
+            return `Request failed (HTTP ${statusCode})`;
         }
 
         // Auto-Disappearing Toast System
@@ -1317,7 +1354,7 @@
             toast.innerHTML = `
                 <div style="display:flex; align-items:center; gap: 12px;">
                     <i data-lucide="${iconName}"></i>
-                    <span>${message}</span>
+                    <span>${esc(message)}</span>
                 </div>
                 <div class="toast-progress"></div>
             `;
@@ -1570,8 +1607,8 @@
 
             teamMembers.forEach(user => {
                 const name = user.full_name || user.username;
-                filterDropdown.innerHTML += `<option value="${user.id}">${name}</option>`;
-                editorDropdown.innerHTML += `<option value="${user.id}">${name}</option>`;
+                filterDropdown.innerHTML += `<option value="${user.id}">${esc(name)}</option>`;
+                editorDropdown.innerHTML += `<option value="${user.id}">${esc(name)}</option>`;
             });
         }
 
@@ -1730,15 +1767,15 @@
                     
                     card.addEventListener('dblclick', () => openTaskDetails(task.id));
 
-                    const priClass = `pri-${task.priority.toLowerCase()}`;
-                    const catPill = `<span class="tag cat-tag">${task.category}</span>`;
-                    const priPill = `<span class="tag pri-tag ${priClass}">${task.priority}</span>`;
+                    const priClass = `pri-${esc(task.priority.toLowerCase())}`;
+                    const catPill = `<span class="tag cat-tag">${esc(task.category)}</span>`;
+                    const priPill = `<span class="tag pri-tag ${priClass}">${esc(task.priority)}</span>`;
 
                     let labelsHTML = '';
                     if (task.labels && task.labels.length) {
                         labelsHTML = `<div class="card-custom-labels">`;
                         task.labels.forEach(lbl => {
-                            labelsHTML += `<div class="custom-label-pill" style="background-color: ${lbl.color}" title="${lbl.name}"></div>`;
+                            labelsHTML += `<div class="custom-label-pill" style="background-color: ${safeColor(lbl.color)}" title="${esc(lbl.name)}"></div>`;
                         });
                         labelsHTML += `</div>`;
                     }
@@ -1761,7 +1798,7 @@
                     if (task.assignee) {
                         const name = task.assignee.full_name || task.assignee.username;
                         const initials = name.split(' ').map(p => p[0]).join('').substring(0, 2).toUpperCase();
-                        assigneeAvatar = `<div class="card-assignee" title="Assigned to ${name}">${initials}</div>`;
+                        assigneeAvatar = `<div class="card-assignee" title="Assigned to ${esc(name)}">${esc(initials)}</div>`;
                     }
 
                     const deadlineHTML = getDeadlineProgressHTML(task.due_date, task.status);
@@ -1771,8 +1808,8 @@
                             ${catPill}
                             ${priPill}
                         </div>
-                        <div class="card-title">${task.title}</div>
-                        <div class="card-desc-preview">${task.description || 'No description.'}</div>
+                        <div class="card-title">${esc(task.title)}</div>
+                        <div class="card-desc-preview">${esc(task.description || 'No description.')}</div>
                         ${labelsHTML}
                         ${hoursProgress}
                         <div class="card-footer">
@@ -1805,16 +1842,16 @@
                 tr.style.cursor = 'pointer';
                 tr.addEventListener('click', () => openTaskDetails(task.id));
 
-                const priClass = `pri-${task.priority.toLowerCase()}`;
+                const priClass = `pri-${esc(task.priority.toLowerCase())}`;
                 const assigneeName = task.assignee ? (task.assignee.full_name || task.assignee.username) : 'Unassigned';
                 const deadlineHTML = getDeadlineProgressHTML(task.due_date, task.status);
 
                 tr.innerHTML = `
-                    <td style="font-weight: 600; color: var(--text-primary);">${task.title}</td>
-                    <td><span class="tag cat-tag">${task.category}</span></td>
-                    <td><span class="tag pri-tag ${priClass}">${task.priority}</span></td>
-                    <td><span class="tag" style="background-color: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-color);">${task.status}</span></td>
-                    <td>${assigneeName}</td>
+                    <td style="font-weight: 600; color: var(--text-primary);">${esc(task.title)}</td>
+                    <td><span class="tag cat-tag">${esc(task.category)}</span></td>
+                    <td><span class="tag pri-tag ${priClass}">${esc(task.priority)}</span></td>
+                    <td><span class="tag" style="background-color: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-color);">${esc(task.status)}</span></td>
+                    <td>${esc(assigneeName)}</td>
                     <td>${deadlineHTML}</td>
                 `;
 
@@ -1879,17 +1916,17 @@
                 card.className = 'task-list-card';
                 card.addEventListener('click', () => openTaskDetails(task.id));
 
-                const priClass = `pri-${task.priority.toLowerCase()}`;
-                const catPill = `<span class="tag cat-tag">${task.category}</span>`;
-                const priPill = `<span class="tag pri-tag ${priClass}">${task.priority}</span>`;
+                const priClass = `pri-${esc(task.priority.toLowerCase())}`;
+                const catPill = `<span class="tag cat-tag">${esc(task.category)}</span>`;
+                const priPill = `<span class="tag pri-tag ${priClass}">${esc(task.priority)}</span>`;
 
-                let statusBadge = `<span class="tag" style="background-color: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-color);">${task.status}</span>`;
+                let statusBadge = `<span class="tag" style="background-color: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-color);">${esc(task.status)}</span>`;
 
                 let labelsHTML = '';
                 if (task.labels && task.labels.length) {
                     labelsHTML = `<div class="card-custom-labels" style="margin: 8px 0;">`;
                     task.labels.forEach(lbl => {
-                        labelsHTML += `<div class="custom-label-pill" style="background-color: ${lbl.color}" title="${lbl.name}"></div>`;
+                        labelsHTML += `<div class="custom-label-pill" style="background-color: ${safeColor(lbl.color)}" title="${esc(lbl.name)}"></div>`;
                     });
                     labelsHTML += `</div>`;
                 }
@@ -1903,11 +1940,11 @@
                         ${priPill}
                         ${statusBadge}
                     </div>
-                    <h4 style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; cursor: pointer; word-wrap: break-word;">${task.title}</h4>
-                    <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${task.description || 'No description.'}</p>
+                    <h4 style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; cursor: pointer; word-wrap: break-word;">${esc(task.title)}</h4>
+                    <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${esc(task.description || 'No description.')}</p>
                     ${labelsHTML}
                     <div style="border-top: 1px solid var(--border-color); padding-top: 10px; font-size: 12px; color: var(--text-muted);">
-                        <div style="margin-bottom: 6px;"><strong>Assignee:</strong> ${assigneeName}</div>
+                        <div style="margin-bottom: 6px;"><strong>Assignee:</strong> ${esc(assigneeName)}</div>
                         <div><strong>Deadline:</strong> ${deadlineHTML}</div>
                     </div>
                 `;
@@ -2080,14 +2117,14 @@
                 const createdDate = new Date(task.created_at + 'Z');
                 document.getElementById('detail-created-val').textContent = createdDate.toLocaleString();
 
-                const mdVal = task.description ? marked.parse(task.description) : '<p style="color: var(--text-muted); font-style: italic;">No description provided.</p>';
+                const mdVal = task.description ? renderMarkdown(task.description) : '<p style="color: var(--text-muted); font-style: italic;">No description provided.</p>';
                 document.getElementById('detail-task-desc-markdown').innerHTML = mdVal;
 
                 const labelContainer = document.getElementById('detail-labels-container');
                 labelContainer.innerHTML = '';
                 if (task.labels && task.labels.length) {
                     task.labels.forEach(lbl => {
-                        labelContainer.innerHTML += `<span class="tag" style="background-color: ${lbl.color}; font-size:11px; padding: 4px 10px;">${lbl.name}</span>`;
+                        labelContainer.innerHTML += `<span class="tag" style="background-color: ${safeColor(lbl.color)}; font-size:11px; padding: 4px 10px;">${esc(lbl.name)}</span>`;
                     });
                 } else {
                     labelContainer.innerHTML = '<span style="color: var(--text-muted); font-size:12px; font-style:italic;">No labels</span>';
@@ -2140,13 +2177,13 @@
                 commentDiv.className = 'comment-item';
                 commentDiv.innerHTML = `
                     <div class="comment-header">
-                        <span class="comment-author">${c.user.full_name || c.user.username}</span>
+                        <span class="comment-author">${esc(c.user.full_name || c.user.username)}</span>
                         <div style="display:flex; gap: 8px; align-items:center;">
                             <span class="comment-date">${createdDate}</span>
                             ${deleteBtnHTML}
                         </div>
                     </div>
-                    <div class="comment-text">${c.content}</div>
+                    <div class="comment-text">${esc(c.content)}</div>
                 `;
                 listContainer.appendChild(commentDiv);
             });
@@ -2217,8 +2254,8 @@
                     <div class="attachment-info">
                         <i data-lucide="file-text"></i>
                         <div class="attachment-details">
-                            <a href="/api/attachments/${att.id}" target="_blank" class="attachment-name" title="Download File">${att.filename}</a>
-                            <span class="attachment-meta">${sizeKb} KB • Uploaded by ${att.user.full_name || att.user.username} on ${uploadedDate}</span>
+                            <a href="/api/attachments/${att.id}" target="_blank" class="attachment-name" title="Download File">${esc(att.filename)}</a>
+                            <span class="attachment-meta">${sizeKb} KB • Uploaded by ${esc(att.user.full_name || att.user.username)} on ${uploadedDate}</span>
                         </div>
                     </div>
                     ${deleteBtnHTML}
@@ -2249,8 +2286,8 @@
                 }
 
                 if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || "Upload failed");
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(apiErrorText(errorData, response.status));
                 }
 
                 fileInput.value = '';
@@ -2344,7 +2381,7 @@
                 div.className = 'checkbox-item';
                 div.innerHTML = `
                     <input type="checkbox" id="lbl-cb-${lbl.id}" value="${lbl.id}">
-                    <span style="border-left: 3px solid ${lbl.color}; padding-left: 6px;">${lbl.name}</span>
+                    <span style="border-left: 3px solid ${safeColor(lbl.color)}; padding-left: 6px;">${esc(lbl.name)}</span>
                 `;
                 listContainer.appendChild(div);
             });
@@ -2412,14 +2449,14 @@
             labelsList.forEach(lbl => {
                 const badge = document.createElement('div');
                 badge.className = 'label-badge';
-                badge.style.backgroundColor = lbl.color;
+                badge.style.backgroundColor = safeColor(lbl.color);
                 
                 const deleteBtnHTML = currentUser.role !== 'Viewer'
-                    ? `<button onclick="deleteLabel(${lbl.id}, '${lbl.name}')" title="Delete label"><i data-lucide="x"></i></button>`
+                    ? `<button onclick="deleteLabel(${lbl.id}, ${jsArg(lbl.name)})" title="Delete label"><i data-lucide="x"></i></button>`
                     : '';
                 
                 badge.innerHTML = `
-                    <span>${lbl.name}</span>
+                    <span>${esc(lbl.name)}</span>
                     ${deleteBtnHTML}
                 `;
                 listContainer.appendChild(badge);
@@ -2614,17 +2651,17 @@
                 const date = new Date(l.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' });
                 
                 const taskLinkHTML = l.task_id 
-                    ? `<a href="#" onclick="openTaskDetails(${l.task_id}); return false;" style="color:var(--accent-color); font-weight:600; text-decoration:none;">"${l.task_title}"</a>`
+                    ? `<a href="#" onclick="openTaskDetails(${l.task_id}); return false;" style="color:var(--accent-color); font-weight:600; text-decoration:none;">"${esc(l.task_title)}"</a>`
                     : '';
 
                 const item = document.createElement('div');
                 item.className = 'activity-item';
                 item.innerHTML = `
                     <div style="flex-grow: 1;">
-                        <span class="activity-user">${l.full_name || l.username}</span>
-                        <span class="activity-action">${l.action.toLowerCase()}</span>
+                        <span class="activity-user">${esc(l.full_name || l.username)}</span>
+                        <span class="activity-action">${esc(l.action.toLowerCase())}</span>
                         ${taskLinkHTML}
-                        <div class="activity-details">${l.details || ''}</div>
+                        <div class="activity-details">${esc(l.details || '')}</div>
                     </div>
                     <span class="activity-time">${date} @ ${time}</span>
                 `;
@@ -2761,13 +2798,13 @@
                     const isSelf = u.id === currentUser.id;
                     const deleteBtnHTML = isSelf 
                         ? `<span style="font-size:12px; color:var(--text-muted); font-style:italic;">Active Account</span>`
-                        : `<button class="secondary-btn logout-btn" onclick="deleteUser(${u.id}, '${u.username}')" style="padding:6px 12px; font-size:12px;"><i data-lucide="user-x" style="width:12px;height:12px;"></i> Delete</button>`;
+                        : `<button class="secondary-btn logout-btn" onclick="deleteUser(${u.id}, ${jsArg(u.username)})" style="padding:6px 12px; font-size:12px;"><i data-lucide="user-x" style="width:12px;height:12px;"></i> Delete</button>`;
 
                     row.innerHTML = `
-                        <td style="font-weight:600;">${u.full_name || 'N/A'}</td>
-                        <td>${u.username}</td>
+                        <td style="font-weight:600;">${esc(u.full_name || 'N/A')}</td>
+                        <td>${esc(u.username)}</td>
                         <td>
-                            <span class="tag" style="background-color: ${u.role === 'Admin' ? 'var(--error)' : u.role === 'Manager' ? 'var(--warning)' : u.role === 'Developer' ? 'var(--accent-color)' : 'var(--text-muted)'}">${u.role}</span>
+                            <span class="tag" style="background-color: ${u.role === 'Admin' ? 'var(--error)' : u.role === 'Manager' ? 'var(--warning)' : u.role === 'Developer' ? 'var(--accent-color)' : 'var(--text-muted)'}">${esc(u.role)}</span>
                         </td>
                         <td>${deleteBtnHTML}</td>
                     `;
@@ -2841,13 +2878,13 @@
                     const createdDate = new Date(b.created_at).toLocaleString();
 
                     row.innerHTML = `
-                        <td style="font-family:monospace; font-size:13px; font-weight:600; color:var(--text-secondary);">${b.filename}</td>
+                        <td style="font-family:monospace; font-size:13px; font-weight:600; color:var(--text-secondary);">${esc(b.filename)}</td>
                         <td>${createdDate}</td>
                         <td>${sizeMb} MB</td>
                         <td>
                             <div class="action-cell">
-                                <a href="/api/backups/${b.filename}" class="secondary-btn" style="padding:6px 12px; font-size:12px; text-decoration:none;"><i data-lucide="download" style="width:12px;height:12px;"></i> Download</a>
-                                <button class="secondary-btn logout-btn" onclick="deleteBackup('${b.filename}')" style="padding:6px 12px; font-size:12px;"><i data-lucide="trash-2" style="width:12px;height:12px;"></i> Delete</button>
+                                <a href="/api/backups/${encodeURIComponent(b.filename)}" class="secondary-btn" style="padding:6px 12px; font-size:12px; text-decoration:none;"><i data-lucide="download" style="width:12px;height:12px;"></i> Download</a>
+                                <button class="secondary-btn logout-btn" onclick="deleteBackup(${jsArg(b.filename)})" style="padding:6px 12px; font-size:12px;"><i data-lucide="trash-2" style="width:12px;height:12px;"></i> Delete</button>
                             </div>
                         </td>
                     `;

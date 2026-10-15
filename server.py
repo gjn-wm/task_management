@@ -5,7 +5,9 @@ from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, status, Response, Request, UploadFile, File, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
+import re
+import secrets
+from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 import time
@@ -17,28 +19,7 @@ import threading
 import traceback
 from bio.zk_tool import Managed, op_test_voice
 
-def _load_dotenv(path: str = ".env"):
-    """Populate os.environ from a .env file, if one exists.
-
-    Hand-rolled rather than using python-dotenv so this adds no dependency.
-    Real environment variables always win, so deployment settings are never
-    silently overridden by a stale local file.
-    """
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                key, value = key.strip(), value.strip().strip('"').strip("'")
-                if key and key not in os.environ:
-                    os.environ[key] = value
-    except FileNotFoundError:
-        pass
-
-
-_load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+import config  # loads .env before anything reads the environment
 
 # --- Realtime RS9N / S362 biometric machine -------------------------------
 # The RS9N cannot be dialled directly the way a ZKTeco can: it is a PUSH device
@@ -139,7 +120,7 @@ def rs9n_call(method: str, path: str, payload: dict = None, timeout: int = 120):
 import models
 import schemas
 import auth
-from database import engine, get_db, Base
+from database import engine, get_db, Base, DATABASE_URL
 from upgrade_db import run_upgrade
 
 # Create directories
@@ -156,32 +137,69 @@ app = FastAPI(
     redoc_url=None,      # Disables /redoc
     openapi_url=None 
     )
-# Configure CORS for local development if needed
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# The SPA is served from this same origin, so no CORS is needed. (It used to
+# allow every origin *with* credentials, letting any website call the API as
+# the logged-in user wherever the browser sent the cookie.)
+
+CONTENT_SECURITY_POLICY = "; ".join([
+    "default-src 'self'",
+    # 'unsafe-inline' is still needed for the inline app script and onclick
+    # handlers; the rest of the policy still blocks foreign scripts and framing.
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: blob:",
+    "connect-src 'self' https://cdn.jsdelivr.net",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+])
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    # CSRF backstop on top of SameSite=Lax: a browser always sends Origin on
+    # cross-site state-changing requests, so refuse any that names another host.
+    if request.method in UNSAFE_METHODS and request.url.path.startswith("/api/"):
+        origin = request.headers.get("origin")
+        if origin and origin != "null":
+            host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+            if urlparse(origin).netloc.lower() != host.lower():
+                return JSONResponse(status_code=403, content={"detail": "Cross-site request refused."})
+
+    response = await call_next(request)
+    response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if request.url.path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
 
 # Startup event to create default admin user if none exists
 @app.on_event("startup")
 def create_initial_admin():
     db = next(get_db())
     try:
-        admin_exists = db.query(models.User).filter(models.User.role == "Admin").first()
-        if not admin_exists:
-            hashed_pw = auth.hash_password("admin123")
+        # Only on a brand-new install. It used to recreate admin/admin123 whenever
+        # no Admin existed, e.g. after the last Admin was demoted.
+        if db.query(models.User).count() == 0:
+            password = os.environ.get("INITIAL_ADMIN_PASSWORD") or secrets.token_urlsafe(12)
             admin_user = models.User(
                 username="admin",
-                password_hash=hashed_pw,
-                role="Admin",    
+                password_hash=auth.hash_password(password),
+                role="Admin",
                 full_name="System Administrator"
             )
             db.add(admin_user)
             db.commit()
-            print("Initial admin user created: admin / admin123")
+            if os.environ.get("INITIAL_ADMIN_PASSWORD"):
+                print("Initial admin user created: admin (password from INITIAL_ADMIN_PASSWORD)", flush=True)
+            else:
+                print(f"Initial admin user created: admin / {password}  (change it after logging in)", flush=True)
             
         # Create some default labels if they don't exist
         default_labels = [
@@ -326,32 +344,46 @@ def sync_due_notifications(db: Session, user: models.User):
     db.commit()
 
 # --- Auth Routes ---
+def set_session_cookie(request: Request, response: Response, user: models.User):
+    response.set_cookie(
+        key=auth.COOKIE_NAME,
+        value=auth.create_access_token(user),
+        httponly=True,
+        max_age=int(auth.TOKEN_TTL.total_seconds()),
+        samesite="lax",
+        # Secure whenever the browser is on HTTPS (cloudflared forwards the
+        # scheme); plain-HTTP local development still works.
+        secure=request.url.scheme == "https",
+        path="/",
+    )
+
+
 @app.post("/api/auth/login")
-def login(response: Response, form_data: schemas.UserCreate, db: Session = Depends(get_db)):
+def login(request: Request, response: Response, form_data: schemas.LoginRequest, db: Session = Depends(get_db)):
+    ip = auth.client_ip(request)
+    retry_after = auth.login_retry_after(ip, form_data.username)
+    if retry_after:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many failed login attempts. Try again in {retry_after // 60 + 1} minute(s).",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     user = db.query(models.User).filter(models.User.username == form_data.username).first()
     if not user or not auth.verify_password(form_data.password, user.password_hash):
+        auth.record_login_failure(ip, form_data.username)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incorrect username or password"
         )
-    
-    # Create token
-    access_token = auth.create_access_token(data={"sub": user.username})
-    
-    # Set cookies
-    response.set_cookie(
-        key=auth.COOKIE_NAME,
-        value=access_token,
-        httponly=True,
-        max_age=604800, # 7 days
-        samesite="lax",
-        secure=False  # Set to True in production with HTTPS
-    )
+
+    auth.clear_login_failures(ip, form_data.username)
+    set_session_cookie(request, response, user)
     return {"status": "success", "username": user.username, "role": user.role, "full_name": user.full_name}
 
 @app.post("/api/auth/logout")
 def logout(response: Response):
-    response.delete_cookie(auth.COOKIE_NAME)
+    response.delete_cookie(auth.COOKIE_NAME, path="/")
     return {"status": "success", "message": "Logged out"}
 
 @app.get("/api/auth/me", response_model=schemas.UserResponse)
@@ -361,22 +393,27 @@ def get_me(current_user: models.User = Depends(auth.get_current_user)):
 @app.post("/api/auth/reset-password")
 def reset_password(
     data: schemas.PasswordReset,
+    request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    if current_user.id == 0 or current_user.username == "guest":
-        raise HTTPException(status_code=400, detail="Guest users cannot reset passwords")
-    
     if not auth.verify_password(data.old_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="Incorrect old password")
-        
+
     current_user.password_hash = auth.hash_password(data.new_password)
+    # Sign out every other session (e.g. a stolen cookie), keep this one.
+    auth.revoke_sessions(current_user)
     db.commit()
+    set_session_cookie(request, response, current_user)
     log_activity(db, current_user.id, "Password Reset", f"Changed password for {current_user.username}")
     return {"status": "success", "message": "Password changed successfully"}
 
 
 # --- User Management Routes ---
+def _admin_count(db: Session) -> int:
+    return db.query(models.User).filter(models.User.role == auth.ROLE_ADMIN).count()
+
 @app.get("/api/users", response_model=List[schemas.UserResponse])
 def list_users(
     skill: Optional[str] = None,
@@ -429,16 +466,22 @@ def update_user(
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-        
+
+    if (user_in.role is not None and user.role == auth.ROLE_ADMIN
+            and user_in.role != auth.ROLE_ADMIN and _admin_count(db) <= 1):
+        raise HTTPException(status_code=400, detail="Cannot remove the last Admin. Promote another user first.")
+
     if user_in.full_name is not None:
         user.full_name = user_in.full_name
-    if user_in.role is not None:
+    if user_in.role is not None and user_in.role != user.role:
         user.role = user_in.role
+        auth.revoke_sessions(user)
     if user_in.skills is not None:
         user.skills = user_in.skills
     if user_in.password:
         user.password_hash = auth.hash_password(user_in.password)
-        
+        auth.revoke_sessions(user)
+
     db.commit()
     db.refresh(user)
     
@@ -456,6 +499,8 @@ def delete_user(
         raise HTTPException(status_code=404, detail="User not found")
     if user.id == admin_user.id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    if user.role == auth.ROLE_ADMIN and _admin_count(db) <= 1:
+        raise HTTPException(status_code=400, detail="Cannot delete the last Admin.")
         
     username = user.username
     db.delete(user)
@@ -465,6 +510,18 @@ def delete_user(
     return {"status": "success", "message": f"User {username} deleted"}
 
 # --- Task Routes ---
+def check_refs(db: Session, *, assignee_id=None, project_id=None, sprint_id=None, label_ids=None, lead_id=None):
+    """400 for ids that do not exist, instead of a foreign-key 500 or a silent drop."""
+    for model, value, label in ((models.User, assignee_id, "Assignee"), (models.User, lead_id, "Project lead"),
+                                (models.Project, project_id, "Project"), (models.Sprint, sprint_id, "Sprint")):
+        if value is not None and db.query(model.id).filter(model.id == value).first() is None:
+            raise HTTPException(status_code=400, detail=f"{label} {value} does not exist.")
+    if label_ids:
+        found = {row.id for row in db.query(models.Label.id).filter(models.Label.id.in_(label_ids))}
+        missing = sorted(set(label_ids) - found)
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Unknown label id(s): {missing}")
+
 @app.get("/api/tasks", response_model=List[schemas.TaskResponse])
 def get_tasks(
     status: Optional[str] = None,
@@ -520,6 +577,12 @@ def create_task(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.check_permission(auth.ROLES_TASK_WRITE))
 ):
+    if (current_user.role == auth.ROLE_DEVELOPER and task_in.assignee_id is not None
+            and task_in.assignee_id != current_user.id):
+        raise HTTPException(status_code=403, detail="Developers can only assign tasks to themselves.")
+    check_refs(db, assignee_id=task_in.assignee_id, project_id=task_in.project_id,
+               sprint_id=task_in.sprint_id, label_ids=task_in.label_ids)
+
     task = models.Task(
         title=task_in.title,
         description=task_in.description,
@@ -562,7 +625,9 @@ def update_task(
         raise HTTPException(status_code=403, detail="You can only modify tasks assigned to you or unassigned tasks.")
     if current_user.role == auth.ROLE_DEVELOPER and task_in.assignee_id is not None and task_in.assignee_id != current_user.id:
         raise HTTPException(status_code=403, detail="Developers cannot reassign tasks to other team members.")
-        
+    check_refs(db, assignee_id=task_in.assignee_id, project_id=task_in.project_id,
+               sprint_id=task_in.sprint_id, label_ids=task_in.label_ids)
+
     fields_to_update = ["title", "description", "priority", "status", "category", "due_date", "estimated_hours", "actual_hours", "assignee_id", "project_id", "sprint_id"]
     for field in fields_to_update:
         val = getattr(task_in, field)
@@ -587,7 +652,7 @@ def update_task(
 @app.patch("/api/tasks/{task_id}/status", response_model=schemas.TaskResponse)
 def update_task_status(
     task_id: int,
-    status_update: dict,
+    status_update: schemas.TaskStatusUpdate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.check_permission(auth.ROLES_TASK_WRITE))
 ):
@@ -597,11 +662,11 @@ def update_task_status(
     if not auth.developer_can_access_task(current_user, task):
         raise HTTPException(status_code=403, detail="You can only modify tasks assigned to you or unassigned tasks.")
         
-    new_status = status_update.get("status")
-    if not new_status:
-        raise HTTPException(status_code=400, detail="Status is required")
-        
+    new_status = status_update.status
     old_status = task.status
+    if new_status == old_status:
+        return task
+
     apply_task_status(task, new_status)
     db.commit()
     db.refresh(task)
@@ -635,8 +700,17 @@ def bulk_task_action(
     if not bulk_in.task_ids:
         raise HTTPException(status_code=400, detail="No tasks selected")
 
-    tasks = db.query(models.Task).filter(models.Task.id.in_(bulk_in.task_ids)).all()
-    if len(tasks) != len(bulk_in.task_ids):
+    if bulk_in.action == "status" and not bulk_in.status:
+        raise HTTPException(status_code=400, detail="status is required for a status change")
+    if bulk_in.action == "priority" and not bulk_in.priority:
+        raise HTTPException(status_code=400, detail="priority is required for a priority change")
+    check_refs(db, assignee_id=bulk_in.assignee_id if bulk_in.action == "assign" else None,
+               project_id=bulk_in.project_id if bulk_in.action == "project" else None,
+               sprint_id=bulk_in.sprint_id if bulk_in.action == "sprint" else None)
+
+    task_ids = set(bulk_in.task_ids)
+    tasks = db.query(models.Task).filter(models.Task.id.in_(task_ids)).all()
+    if len(tasks) != len(task_ids):
         raise HTTPException(status_code=404, detail="One or more tasks not found")
 
     updated = 0
@@ -703,6 +777,7 @@ def create_project(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.check_permission(auth.ROLES_PROJECT_MANAGE))
 ):
+    check_refs(db, lead_id=project_in.lead_id)
     project = models.Project(
         name=project_in.name,
         description=project_in.description,
@@ -725,6 +800,7 @@ def update_project(
     project = db.query(models.Project).filter(models.Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    check_refs(db, lead_id=project_in.lead_id)
 
     for field in ["name", "description", "status", "lead_id"]:
         val = getattr(project_in, field)
@@ -858,6 +934,7 @@ def create_sprint(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.check_permission(auth.ROLES_PROJECT_MANAGE))
 ):
+    check_refs(db, project_id=sprint_in.project_id)
     sprint = models.Sprint(
         name=sprint_in.name,
         project_id=sprint_in.project_id,
@@ -882,6 +959,11 @@ def update_sprint(
     sprint = db.query(models.Sprint).filter(models.Sprint.id == sprint_id).first()
     if not sprint:
         raise HTTPException(status_code=404, detail="Sprint not found")
+    check_refs(db, project_id=sprint_in.project_id)
+    start = sprint_in.start_date or sprint.start_date
+    end = sprint_in.end_date or sprint.end_date
+    if end < start:
+        raise HTTPException(status_code=400, detail="end_date must be on or after start_date")
 
     for field in ["name", "project_id", "start_date", "end_date", "goal", "status"]:
         val = getattr(sprint_in, field)
@@ -1109,8 +1191,22 @@ def delete_label(
     return {"status": "success", "message": f"Label '{name}' deleted"}
 
 # --- Attachments Routes ---
+MAX_UPLOAD_BYTES = config.get_int("MAX_UPLOAD_MB", 25) * 1024 * 1024
+UPLOAD_CHUNK = 1024 * 1024
+
+
+def _safe_display_name(name: Optional[str]) -> str:
+    # Keep the user's filename for display/download only; it never touches the
+    # filesystem path, so "../" or "/" in it cannot escape uploads/.
+    base = os.path.basename((name or "").replace("\\", "/")).strip()
+    base = re.sub(r"[\x00-\x1f\x7f]", "", base)
+    return base[:200] or "file"
+
+
+# Plain def (not async): the work is blocking file and DB I/O, which would
+# otherwise stall the event loop for every other request.
 @app.post("/api/tasks/{task_id}/attachments", response_model=schemas.AttachmentResponse)
-async def upload_attachment(
+def upload_attachment(
     task_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -1121,32 +1217,41 @@ async def upload_attachment(
         raise HTTPException(status_code=404, detail="Task not found")
     if not auth.developer_can_access_task(current_user, task):
         raise HTTPException(status_code=403, detail="You do not have access to this task.")
-        
-    # Generate path
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    clean_filename = f"{timestamp}_{file.filename.replace(' ', '_')}"
-    file_path = os.path.join("uploads", clean_filename)
-    
-    # Save file
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-        
-    # File size
-    file_size = os.path.getsize(file_path)
-    
-    # DB entry
+
+    display_name = _safe_display_name(file.filename)
+    ext = os.path.splitext(display_name)[1].lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,10}", ext):
+        ext = ""
+    # Random stored name: no collisions between same-named uploads, and nothing
+    # user-controlled in the path.
+    file_path = os.path.join("uploads", f"{uuid.uuid4().hex}{ext}")
+
+    size = 0
+    try:
+        with open(file_path, "wb") as buffer:
+            while chunk := file.file.read(UPLOAD_CHUNK):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413,
+                                        detail=f"File is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
+                buffer.write(chunk)
+    except BaseException:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise
+
     attachment = models.Attachment(
         task_id=task_id,
         user_id=current_user.id,
-        filename=file.filename,
+        filename=display_name,
         file_path=file_path,
-        file_size=file_size
+        file_size=size
     )
     db.add(attachment)
     db.commit()
     db.refresh(attachment)
-    
-    log_activity(db, current_user.id, "Upload File", f"Uploaded file: {file.filename}", task.id)
+
+    log_activity(db, current_user.id, "Upload File", f"Uploaded file: {display_name}", task.id)
     return attachment
 
 @app.get("/api/attachments/{attachment_id}")
@@ -1162,14 +1267,20 @@ def download_attachment(
         task = db.query(models.Task).filter(models.Task.id == attachment.task_id).first()
         if task and not auth.developer_can_access_task(current_user, task):
             raise HTTPException(status_code=403, detail="Access denied to this file.")
-            
-    if not os.path.exists(attachment.file_path):
+
+    # Only ever serve files that really live in uploads/.
+    uploads_dir = os.path.realpath("uploads")
+    real_path = os.path.realpath(attachment.file_path)
+    if not real_path.startswith(uploads_dir + os.sep) or not os.path.isfile(real_path):
         raise HTTPException(status_code=404, detail="File not found on server")
-        
+
+    # Always a download (Content-Disposition: attachment, octet-stream, nosniff),
+    # so an uploaded .html/.svg can never render as a page on this origin.
     return FileResponse(
-        path=attachment.file_path,
+        path=real_path,
         filename=attachment.filename,
-        media_type="application/octet-stream"
+        media_type="application/octet-stream",
+        content_disposition_type="attachment",
     )
 
 @app.delete("/api/attachments/{attachment_id}")
@@ -1349,6 +1460,17 @@ def get_analytics(
     }
 
 # --- Backup Management Routes ---
+BACKUP_NAME_RE = re.compile(r"^database_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.(sql|db)$")
+
+
+def _backup_path(filename: str) -> str:
+    # Backup names are generated by create_backup; anything else is refused,
+    # so a crafted name cannot reach files outside backups/.
+    if not BACKUP_NAME_RE.fullmatch(filename):
+        raise HTTPException(status_code=400, detail="Invalid backup filename")
+    return os.path.join("backups", filename)
+
+
 @app.get("/api/backups")
 def list_backups(
     admin_user: models.User = Depends(auth.check_permission(["Admin"]))
@@ -1378,26 +1500,39 @@ def create_backup(
     backup_filename = f"database_{timestamp}.sql"
     backup_path = os.path.join("backups", backup_filename)
     
+    import subprocess
+    from sqlalchemy.engine import make_url
+    db_url = make_url(DATABASE_URL)
+    container = os.environ.get("BACKUP_PG_CONTAINER", "postgres18")
+    # Credentials come from DATABASE_URL via the environment, never argv or the
+    # source. pg_dump runs inside the container, so connect to it locally.
+    cmd = ["docker", "exec", "-i", "-e", "PGPASSWORD", container,
+           "pg_dump", "-U", db_url.username or "postgres", db_url.database or ""]
+    env = {**os.environ, "PGPASSWORD": db_url.password or ""}
     try:
-        # First commit anything pending
-        db.commit()
-        # Backup Postgres database using pg_dump via docker
-        import subprocess
         with open(backup_path, "w", encoding="utf-8") as f:
-            cmd = ["docker", "exec", "-i", "-e", "PGPASSWORD=gajendra", "postgres18", "pg_dump", "-U", "admin", "gjn_db"]
-            subprocess.run(cmd, stdout=f, check=True)
-        log_activity(db, admin_user.id, "Database Backup", f"Created database backup: {backup_filename}")
-        return {"status": "success", "filename": backup_filename}
+            result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, env=env, timeout=600)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode("utf-8", "replace").strip()[:300] or
+                               f"pg_dump exited with {result.returncode}")
+        if os.path.getsize(backup_path) == 0:
+            raise RuntimeError("pg_dump produced an empty file")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Backup failed: {str(e)}")
+        # Never leave a partial/empty dump that would be listed as a backup.
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
+        raise HTTPException(status_code=500, detail=f"Backup failed: {e}")
+
+    log_activity(db, admin_user.id, "Database Backup", f"Created database backup: {backup_filename}")
+    return {"status": "success", "filename": backup_filename}
 
 @app.get("/api/backups/{filename}")
 def download_backup(
     filename: str,
     admin_user: models.User = Depends(auth.check_permission(["Admin"]))
 ):
-    path = os.path.join("backups", filename)
-    if not os.path.exists(path):
+    path = _backup_path(filename)
+    if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="Backup file not found")
     return FileResponse(
         path=path,
@@ -1411,10 +1546,10 @@ def delete_backup(
     db: Session = Depends(get_db),
     admin_user: models.User = Depends(auth.check_permission(["Admin"]))
 ):
-    path = os.path.join("backups", filename)
-    if not os.path.exists(path):
+    path = _backup_path(filename)
+    if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="Backup file not found")
-        
+
     try:
         os.remove(path)
         log_activity(db, admin_user.id, "Delete Backup", f"Deleted backup file: {filename}")
@@ -1978,7 +2113,8 @@ def spa_test_time():
 
 # Mount static files (PWA support, manifest, service worker)
 app.mount("/static", StaticFiles(directory="static"), name="static")
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+# uploads/ is deliberately NOT mounted: attachments are served only through
+# the authenticated /api/attachments/{id}, which applies the role checks.
 
 @app.get("/{full_path:path}")
 def spa_fallback(full_path: str):

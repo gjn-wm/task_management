@@ -10,7 +10,7 @@ def run_migration():
     sqlite_conn.row_factory = sqlite3.Row
     sqlite_cursor = sqlite_conn.cursor()
 
-    print(f"Connecting to target PostgreSQL database: {DATABASE_URL}")
+    print("Connecting to target PostgreSQL database...")
     pg_engine = create_engine(DATABASE_URL)
 
     print("Creating tables in PostgreSQL if they don't exist...")

@@ -24,6 +24,7 @@ htmlcov/
 # Environment and secrets
 .env
 .env.*
+!.env.example
 
 # Local databases and logs
 *.sqlite3

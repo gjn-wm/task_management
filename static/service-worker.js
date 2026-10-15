@@ -1,4 +1,4 @@
-const CACHE_NAME = "itmsu-cache-v2";
+const CACHE_NAME = "itmsu-cache-v3";
 const ASSETS = [
   "/",
   "/static/manifest.json",
