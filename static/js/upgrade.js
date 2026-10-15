@@ -187,15 +187,6 @@ async function handleSaveProject(e) {
 let allTasksQuickFilter = null;
 let allTasksRequestSeq = 0;
 
-function applyQuickFilter(tasks) {
-    if (allTasksQuickFilter === 'pending') return tasks.filter(t => t.status !== 'Done');
-    if (allTasksQuickFilter === 'overdue') {
-        const today = localDateStr(new Date());
-        return tasks.filter(t => t.status !== 'Done' && t.due_date && t.due_date < today);
-    }
-    return tasks;
-}
-
 function setAllTasksViewMode(mode) {
     allTasksViewMode = mode;
     document.getElementById('all-tasks-cards-btn')?.classList.toggle('active', mode === 'cards');
@@ -244,8 +235,7 @@ function renderAllTasksTable() {
     }
     document.getElementById('all-tasks-empty').style.display = 'none';
 
-    const startIndex = (allTasksCurrentPage - 1) * allTasksPageSize;
-    const pageItems = allTasksList.slice(startIndex, startIndex + allTasksPageSize);
+    const pageItems = allTasksList;   // already one server page
 
     tbody.innerHTML = '';
     pageItems.forEach(task => {
@@ -275,11 +265,11 @@ function renderAllTasksTable() {
         tbody.appendChild(tr);
     });
 
-    const totalPages = Math.ceil(allTasksList.length / allTasksPageSize);
+    const totalPages = allTasksTotalPages();
     const paginationContainer = document.getElementById('pagination-container');
     if (totalPages > 1) {
         paginationContainer.style.display = 'flex';
-        document.getElementById('pagination-info').textContent = `Page ${allTasksCurrentPage} of ${totalPages} (${allTasksList.length} tasks)`;
+        document.getElementById('pagination-info').textContent = `Page ${allTasksCurrentPage} of ${totalPages} (${allTasksTotal} tasks)`;
         document.getElementById('prev-page-btn').disabled = allTasksCurrentPage === 1;
         document.getElementById('next-page-btn').disabled = allTasksCurrentPage === totalPages;
     } else {
@@ -334,7 +324,7 @@ async function executeBulkAction(action) {
             showToast(`Updated ${data.updated} task(s)`, 'success');
             selectedTaskIds.clear();
             updateBulkActionBar();
-            loadAllTasks();
+            loadAllTasks(1, { silent: true });
             if (activeView === 'kanban') loadTasks();
         }
     } catch (err) {
@@ -492,12 +482,16 @@ function initUpgradeFeatures() {
     };
 
     const origLoadAllTasks = loadAllTasks;
+    // Server-paginated (/api/tasks/page).
     // opts.quick: 'pending' | 'overdue' | null, set by the dashboard KPI cards.
-    //   Kept across silent refreshes; any filter the user touches clears it.
-    // opts.silent: background refresh - keep the page and the bulk selection.
+    //   Kept across silent refreshes and paging; any filter the user touches clears it.
+    // opts.silent: background refresh - reload the current page, keep the selection.
+    // opts.paging: prev/next - keep the filters and the selection.
     loadAllTasks = async function(page = 1, opts = {}) {
+        const keep = opts.silent || opts.paging;
         if (opts.quick !== undefined) allTasksQuickFilter = opts.quick;
-        else if (!opts.silent) allTasksQuickFilter = null;
+        else if (!keep) allTasksQuickFilter = null;
+        if (opts.silent) page = allTasksCurrentPage;
         const requestId = ++allTasksRequestSeq;
         const search = document.getElementById('all-tasks-filter-search').value;
         const priority = document.getElementById('all-tasks-filter-priority').value;
@@ -511,23 +505,23 @@ function initUpgradeFeatures() {
         if (category) queryParams.push(`category=${category}`);
         if (status) queryParams.push(`status=${status}`);
         if (projectId) queryParams.push(`project_id=${projectId}`);
+        if (allTasksQuickFilter === 'pending') queryParams.push('open_only=true');
+        if (allTasksQuickFilter === 'overdue') queryParams.push('overdue=true');
+        queryParams.push(`limit=${allTasksPageSize}`, `offset=${(page - 1) * allTasksPageSize}`);
 
-        const url = '/api/tasks' + (queryParams.length ? `?${queryParams.join('&')}` : '');
         try {
-            const tasks = await apiFetch(url);
+            const data = await apiFetch(`/api/tasks/page?${queryParams.join('&')}`);
             // Typing in the search box fires one request per keystroke; drop
             // answers that arrive after a newer request was made.
-            if (requestId !== allTasksRequestSeq || !tasks) return;
-            allTasksList = applyQuickFilter(tasks);
-            if (opts.silent) {
-                const present = new Set(allTasksList.map(t => t.id));
-                [...selectedTaskIds].forEach(id => { if (!present.has(id)) selectedTaskIds.delete(id); });
-                const pages = Math.max(1, Math.ceil(allTasksList.length / allTasksPageSize));
-                allTasksCurrentPage = Math.min(allTasksCurrentPage, pages);
-            } else {
-                allTasksCurrentPage = 1;
-                selectedTaskIds.clear();
+            if (requestId !== allTasksRequestSeq || !data) return;
+            allTasksTotal = data.total;
+            // The page we asked for can vanish (tasks deleted elsewhere): step back.
+            if (!data.items.length && page > 1 && data.total > 0) {
+                return loadAllTasks(allTasksTotalPages(), { ...opts, paging: true });
             }
+            allTasksList = data.items;
+            allTasksCurrentPage = page;
+            if (!keep) selectedTaskIds.clear();
             updateBulkActionBar();
             if (allTasksViewMode === 'table') renderAllTasksTable();
             else renderAllTasks();
@@ -627,7 +621,7 @@ function initUpgradeFeatures() {
                 closeModal('task-editor-modal');
                 showToast(taskId ? 'Task details updated' : 'Task created successfully', 'success');
                 if (activeView === 'kanban') loadTasks();
-                else if (activeView === 'all-tasks') loadAllTasks();
+                else if (activeView === 'all-tasks') loadAllTasks(1, { silent: true });
                 else if (activeView === 'calendar') loadCalendar();
             }
         } catch (err) {

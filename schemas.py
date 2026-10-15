@@ -1,4 +1,4 @@
-from pydantic import AfterValidator, BaseModel, Field, StringConstraints, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from datetime import date, datetime
 from typing import Annotated, List, Literal, Optional
 
@@ -41,8 +41,7 @@ class LabelCreate(BaseModel):
 
 class LabelResponse(LabelBase):
     id: int
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- User Schemas ---
 class UserBase(BaseModel):
@@ -78,8 +77,7 @@ class PasswordReset(BaseModel):
 class UserResponse(UserBase):
     id: int
     skill_list: List[str] = []
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
     @classmethod
     def from_user(cls, user):
@@ -117,8 +115,7 @@ class ProjectResponse(ProjectBase):
     task_count: int = 0
     created_at: datetime
     updated_at: datetime
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Subtask Schemas ---
 class SubtaskCreate(BaseModel):
@@ -136,8 +133,7 @@ class SubtaskResponse(BaseModel):
     is_completed: bool
     sort_order: int
     created_at: datetime
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Bulk Task Schemas ---
 class BulkTaskAction(BaseModel):
@@ -185,8 +181,7 @@ class SprintResponse(SprintBase):
     task_count: int = 0
     completed_count: int = 0
     created_at: datetime
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Notification Schemas ---
 class NotificationResponse(BaseModel):
@@ -197,8 +192,7 @@ class NotificationResponse(BaseModel):
     message: str
     is_read: bool
     created_at: datetime
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Comment Schemas ---
 class CommentCreate(BaseModel):
@@ -210,8 +204,7 @@ class CommentResponse(BaseModel):
     content: str
     created_at: datetime
     user: Optional[UserResponse] = None   # None once the author is deleted
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Attachment Schemas ---
 class AttachmentResponse(BaseModel):
@@ -221,8 +214,7 @@ class AttachmentResponse(BaseModel):
     file_size: int
     uploaded_at: datetime
     user: Optional[UserResponse] = None   # None once the author is deleted
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Task Schemas ---
 class TaskBase(BaseModel):
@@ -278,14 +270,18 @@ class TaskResponse(TaskBase):
     subtasks: List[SubtaskResponse] = []
     created_at: datetime
     updated_at: datetime
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
+class TaskPage(BaseModel):
+    items: List[TaskResponse]
+    total: int
+    limit: int
+    offset: int
 
 class TaskDetailResponse(TaskResponse):
     comments: List[CommentResponse] = []
     attachments: List[AttachmentResponse] = []
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Activity Log Schemas ---
 class ActivityLogResponse(BaseModel):
@@ -295,8 +291,7 @@ class ActivityLogResponse(BaseModel):
     timestamp: datetime
     user: Optional[UserResponse] = None   # None once the author is deleted
     task_id: Optional[int] = None
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TimeTestRequest(BaseModel):
     use_today: bool

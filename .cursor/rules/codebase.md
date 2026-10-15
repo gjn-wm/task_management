@@ -24,7 +24,7 @@
 Backlog → Todo → In Progress → Review → Testing → Done
 
 ## Key API routes
-- `/api/tasks`, `/api/tasks/bulk` (assign/status/priority/project/sprint/delete)
+- `/api/tasks` (full list), `/api/tasks/page?limit=&offset=&open_only=&overdue=` (All Tasks table), `/api/tasks/bulk` (assign/status/priority/project/sprint/delete)
 - `/api/projects`, `/api/sprints`, `/api/sprints/{id}/burndown`
 - `/api/notifications`, `/api/notifications/unread-count`
 - `/api/users?skill=Backend` — filter by skill

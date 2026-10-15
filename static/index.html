@@ -13,11 +13,11 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- Lucide Icons -->
-    <script src="https://cdn.jsdelivr.net/npm/lucide/dist/umd/lucide.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@1.57.0/dist/umd/lucide.min.js" integrity="sha384-Qp5jsYqEgOGiWD8YMQ6yXIycASOePxr9mmbt+Ua0Wu1IScYxo0Pxf7o3Kx6NWJID" crossorigin="anonymous"></script>
     <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous"></script>
     <!-- Marked.js for Markdown -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.17/dist/purify.min.js" integrity="sha384-P0JNneQf81HOl9VwNXK76cQ9VMD6Nfsnepxb0cCOg8+UzEdzgPHAPV4wVQrvYQSx" crossorigin="anonymous"></script>
     <link rel="stylesheet" href="/static/css/app.css">
 </head>
@@ -1275,8 +1275,13 @@
 
         // Register Service Worker
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/static/service-worker.js')
-                .then(() => console.log('PWA Service Worker Registered.'))
+            // Served from the site root so its scope covers the app. It used to be
+            // registered from /static/, whose scope never included the pages, so it
+            // never handled a request. Remove that old registration.
+            navigator.serviceWorker.getRegistrations().then(regs => regs
+                .filter(r => new URL(r.scope).pathname.startsWith('/static/'))
+                .forEach(r => r.unregister()));
+            navigator.serviceWorker.register('/service-worker.js', { scope: '/' })
                 .catch(err => console.log('SW registration failed: ', err));
         }
 
@@ -1857,9 +1862,16 @@
         }
 
         // All Tasks View Functions
+        // All Tasks is paginated on the server (/api/tasks/page): allTasksList
+        // holds the current page only, allTasksTotal the number of matches.
         let allTasksList = [];
+        let allTasksTotal = 0;
         let allTasksCurrentPage = 1;
         let allTasksPageSize = 12;
+
+        function allTasksTotalPages() {
+            return Math.max(1, Math.ceil(allTasksTotal / allTasksPageSize));
+        }
 
         async function loadAllTasks(page = 1) {
             const search = document.getElementById('all-tasks-filter-search').value;
@@ -1899,11 +1911,8 @@
 
             emptyState.style.display = 'none';
 
-            // Calculate pagination
-            const totalPages = Math.ceil(allTasksList.length / allTasksPageSize);
-            const startIndex = (allTasksCurrentPage - 1) * allTasksPageSize;
-            const endIndex = startIndex + allTasksPageSize;
-            const pageItems = allTasksList.slice(startIndex, endIndex);
+            const totalPages = allTasksTotalPages();
+            const pageItems = allTasksList;
 
             grid.innerHTML = '';
             pageItems.forEach(task => {
@@ -1950,7 +1959,7 @@
             // Show pagination if needed
             if (totalPages > 1) {
                 paginationContainer.style.display = 'flex';
-                document.getElementById('pagination-info').textContent = `Page ${allTasksCurrentPage} of ${totalPages} (${allTasksList.length} tasks)`;
+                document.getElementById('pagination-info').textContent = `Page ${allTasksCurrentPage} of ${totalPages} (${allTasksTotal} tasks)`;
                 document.getElementById('prev-page-btn').disabled = allTasksCurrentPage === 1;
                 document.getElementById('next-page-btn').disabled = allTasksCurrentPage === totalPages;
             } else {
@@ -1962,17 +1971,14 @@
 
         function prevPage() {
             if (allTasksCurrentPage > 1) {
-                allTasksCurrentPage--;
-                renderAllTasks();
+                loadAllTasks(allTasksCurrentPage - 1, { paging: true });
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             }
         }
 
         function nextPage() {
-            const totalPages = Math.ceil(allTasksList.length / allTasksPageSize);
-            if (allTasksCurrentPage < totalPages) {
-                allTasksCurrentPage++;
-                renderAllTasks();
+            if (allTasksCurrentPage < allTasksTotalPages()) {
+                loadAllTasks(allTasksCurrentPage + 1, { paging: true });
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             }
         }

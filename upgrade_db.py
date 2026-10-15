@@ -1,7 +1,7 @@
 """Apply schema upgrades for projects, subtasks, and task.project_id."""
 from sqlalchemy import inspect, text
 from database import engine, Base
-import models  # noqa: F401 — register models with Base.metadata
+import models  # registers models with Base.metadata; also provides INDEXED_COLUMNS
 
 
 def column_exists(inspector, table: str, column: str) -> bool:
@@ -137,6 +137,14 @@ def run_upgrade():
             """))
 
     Base.metadata.create_all(bind=engine)
+
+    # Indexes declared in models.INDEXED_COLUMNS; existing databases predate them.
+    with engine.begin() as conn:
+        for table, columns in models.INDEXED_COLUMNS.items():
+            if not table_exists(inspector, table):
+                continue
+            for column in columns:
+                conn.execute(text(f'CREATE INDEX IF NOT EXISTS ix_{table}_{column} ON {table} ({column})'))
     print("Database upgrade completed.")
 
 

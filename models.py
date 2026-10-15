@@ -1,5 +1,11 @@
-from datetime import datetime
-from sqlalchemy import Table, Column, Integer, String, Float, DateTime, ForeignKey, Boolean
+from datetime import datetime, timezone
+
+
+def utcnow() -> datetime:
+    """Naive UTC "now": how every DateTime column in this schema is stored."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+from sqlalchemy import Table, Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Index
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -41,8 +47,8 @@ class Project(Base):
     description = Column(String, default="")
     status = Column(String, default="Active")
     lead_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     lead = relationship("User", back_populates="led_projects")
     tasks = relationship("Task", back_populates="project")
@@ -58,7 +64,7 @@ class Sprint(Base):
     end_date = Column(String, nullable=False)
     goal = Column(String, default="")
     status = Column(String, default="Planned")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     project = relationship("Project", back_populates="sprints")
     tasks = relationship("Task", back_populates="sprint")
@@ -73,7 +79,7 @@ class Notification(Base):
     title = Column(String, nullable=False)
     message = Column(String, nullable=False)
     is_read = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     user = relationship("User", back_populates="notifications")
     task = relationship("Task", back_populates="notifications")
@@ -104,8 +110,8 @@ class Task(Base):
     project_id = Column(Integer, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
     sprint_id = Column(Integer, ForeignKey("sprints.id", ondelete="SET NULL"), nullable=True)
     completed_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     # Relationships
     assignee = relationship("User", back_populates="tasks")
@@ -127,7 +133,7 @@ class Subtask(Base):
     title = Column(String, nullable=False)
     is_completed = Column(Boolean, default=False)
     sort_order = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     task = relationship("Task", back_populates="subtasks")
 
@@ -138,7 +144,7 @@ class Comment(Base):
     task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     content = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     # Relationships
     task = relationship("Task", back_populates="comments")
@@ -153,7 +159,7 @@ class Attachment(Base):
     filename = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
     file_size = Column(Integer, nullable=False)
-    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_at = Column(DateTime, default=utcnow)
 
     # Relationships
     task = relationship("Task", back_populates="attachments")
@@ -167,8 +173,30 @@ class ActivityLog(Base):
     task_id = Column(Integer, ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)
     action = Column(String, nullable=False)
     details = Column(String, nullable=True)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=utcnow)
 
     # Relationships
     user = relationship("User", back_populates="activity_logs")
     task = relationship("Task", back_populates="activity_logs")
+
+
+# Indexes for the foreign keys and filters the API queries on. Names follow
+# SQLAlchemy's ix_<table>_<column> convention; upgrade_db.py creates the same
+# ones with IF NOT EXISTS on existing databases (create_all only covers new tables).
+INDEXED_COLUMNS = {
+    "tasks": ["status", "assignee_id", "project_id", "sprint_id", "due_date", "created_at"],
+    "subtasks": ["task_id"],
+    "comments": ["task_id"],
+    "attachments": ["task_id"],
+    "activity_logs": ["timestamp", "task_id", "user_id"],
+    "notifications": ["user_id", "task_id"],
+    "sprints": ["project_id"],
+    "task_labels": ["label_id"],
+}
+_tables = {"tasks": Task, "subtasks": Subtask, "comments": Comment, "attachments": Attachment,
+           "activity_logs": ActivityLog, "notifications": Notification, "sprints": Sprint}
+for _table, _columns in INDEXED_COLUMNS.items():
+    for _column in _columns:
+        _col = task_labels.c[_column] if _table == "task_labels" else getattr(_tables[_table], _column)
+        Index(f"ix_{_table}_{_column}", _col)
+

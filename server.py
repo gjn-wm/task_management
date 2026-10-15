@@ -3,14 +3,18 @@ import shutil
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 from fastapi import FastAPI, Depends, HTTPException, status, Response, Request, UploadFile, File, BackgroundTasks
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+import hashlib
 from fastapi.staticfiles import StaticFiles
 import re
 import secrets
 from urllib.parse import urlparse
-from sqlalchemy.orm import Session
+from fastapi import Query
+from sqlalchemy import case, func
+from sqlalchemy.orm import Session, selectinload
 
 import time
+from contextlib import asynccontextmanager
 import uuid
 import json
 import urllib.request
@@ -123,20 +127,43 @@ import auth
 from database import engine, get_db, Base, DATABASE_URL
 from upgrade_db import run_upgrade
 
-# Create directories
-os.makedirs("uploads", exist_ok=True)
-os.makedirs("backups", exist_ok=True)
+# Absolute paths, so the app works from any working directory (tests, CI).
+STATIC_DIR = os.path.join(config.BASE_DIR, "static")
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR") or os.path.join(config.BASE_DIR, "uploads")
+BACKUP_DIR = os.environ.get("BACKUP_DIR") or os.path.join(config.BASE_DIR, "backups")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
+
+
+def attachment_disk_path(stored: str) -> Optional[str]:
+    """Absolute path of a stored attachment, or None if it would leave UPLOAD_DIR.
+
+    New rows store just the generated file name; older rows store
+    "uploads/<name>". Both resolve to UPLOAD_DIR/<name>.
+    """
+    path = os.path.realpath(os.path.join(UPLOAD_DIR, os.path.basename(stored or "")))
+    root = os.path.realpath(UPLOAD_DIR)
+    return path if path.startswith(root + os.sep) else None
 
 # Initialize database
 Base.metadata.create_all(bind=engine)
 run_upgrade()
 
+@asynccontextmanager
+async def lifespan(_app):
+    # Startup work, in order. (Defined further down; called only at startup.)
+    create_initial_admin()
+    recover_interrupted_time_test()
+    yield
+
+
 app = FastAPI(
-    title="Task Management API",    
+    title="Task Management API",
     docs_url=None,       # Disables /docs
     redoc_url=None,      # Disables /redoc
-    openapi_url=None 
-    )
+    openapi_url=None,
+    lifespan=lifespan,
+)
 # The SPA is served from this same origin, so no CORS is needed. (It used to
 # allow every origin *with* credentials, letting any website call the API as
 # the logged-in user wherever the browser sent the cookie.)
@@ -177,10 +204,20 @@ async def security_middleware(request: Request, call_next):
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
     if request.url.path.startswith("/api/"):
         response.headers.setdefault("Cache-Control", "no-store")
+    elif request.method == "GET" and response.status_code in (200, 304):
+        # App files and pages: browsers must revalidate (cheap 304 via ETag), so
+        # a deploy is picked up on the next load. The service worker is
+        # network-first for the same reason.
+        response.headers.setdefault("Cache-Control", "no-cache")
+        # Cloudflare caches .js/.css at its edge by default regardless of the
+        # header above (seen serving HITs with max-age=14400). These targeted
+        # headers stop it storing new copies; versioned asset URLs (below)
+        # make any copy it already holds irrelevant.
+        response.headers.setdefault("CDN-Cache-Control", "no-store")
+        response.headers.setdefault("Cloudflare-CDN-Cache-Control", "no-store")
     return response
 
 # Startup event to create default admin user if none exists
-@app.on_event("startup")
 def create_initial_admin():
     db = next(get_db())
     try:
@@ -245,9 +282,9 @@ def log_activity(db: Session, user_id: int, action: str, details: str, task_id: 
 def project_task_count(db: Session, project_id: int) -> int:
     return db.query(models.Task).filter(models.Task.project_id == project_id).count()
 
-def serialize_project(project: models.Project, db: Session) -> schemas.ProjectResponse:
+def serialize_project(project: models.Project, db: Session, task_count: Optional[int] = None) -> schemas.ProjectResponse:
     data = schemas.ProjectResponse.model_validate(project)
-    data.task_count = project_task_count(db, project.id)
+    data.task_count = project_task_count(db, project.id) if task_count is None else task_count
     return data
 
 def filter_tasks_for_user(query, user: models.User):
@@ -265,7 +302,7 @@ def apply_task_status(task: models.Task, new_status: str):
     task.status = new_status
     if new_status == "Done":
         if not task.completed_at:
-            task.completed_at = datetime.utcnow()
+            task.completed_at = models.utcnow()
     else:
         task.completed_at = None
 
@@ -274,12 +311,22 @@ def serialize_user(user: models.User) -> schemas.UserResponse:
     data.skill_list = schemas.parse_skills(user.skills)
     return data
 
-def sprint_stats(db: Session, sprint_id: int):
-    tasks = db.query(models.Task).filter(models.Task.sprint_id == sprint_id).all()
-    return len(tasks), len([t for t in tasks if t.status == "Done"])
+def sprint_stats_map(db: Session, sprint_ids=None) -> dict:
+    """{sprint_id: (total, done)} in one aggregate query."""
+    query = db.query(
+        models.Task.sprint_id,
+        func.count(models.Task.id),
+        func.sum(case((models.Task.status == "Done", 1), else_=0)),
+    ).filter(models.Task.sprint_id.isnot(None))
+    if sprint_ids is not None:
+        query = query.filter(models.Task.sprint_id.in_(sprint_ids))
+    return {sid: (total, int(done or 0)) for sid, total, done in query.group_by(models.Task.sprint_id)}
 
-def serialize_sprint(sprint: models.Sprint, db: Session) -> schemas.SprintResponse:
-    total, completed = sprint_stats(db, sprint.id)
+def sprint_stats(db: Session, sprint_id: int):
+    return sprint_stats_map(db, [sprint_id]).get(sprint_id, (0, 0))
+
+def serialize_sprint(sprint: models.Sprint, db: Session, stats: Optional[tuple] = None) -> schemas.SprintResponse:
+    total, completed = stats if stats is not None else sprint_stats(db, sprint.id)
     data = schemas.SprintResponse.model_validate(sprint)
     data.task_count = total
     data.completed_count = completed
@@ -288,7 +335,18 @@ def serialize_sprint(sprint: models.Sprint, db: Session) -> schemas.SprintRespon
 DUE_NOTIFICATION_TYPES = ("overdue", "due_today", "due_soon")
 
 
+DUE_SYNC_INTERVAL_SEC = 30
+_last_due_sync: dict = {}
+
+
 def sync_due_notifications(db: Session, user: models.User):
+    # Called by the 60 s badge poll of every open tab; at most once per 30 s per
+    # user is plenty for alerts that change by the day.
+    now = time.time()
+    if now - _last_due_sync.get(user.id, 0) < DUE_SYNC_INTERVAL_SEC:
+        return
+    _last_due_sync[user.id] = now
+
     today_str = datetime.now().strftime("%Y-%m-%d")
     tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -306,7 +364,19 @@ def sync_due_notifications(db: Session, user: models.User):
     else:
         return
 
-    for task in task_query.all():
+    # Only tasks due by tomorrow can need an alert (ISO strings sort as dates).
+    tasks = task_query.filter(models.Task.due_date <= tomorrow_str).all()
+    if not tasks:
+        return
+    existing_by_key = {
+        (n.user_id, n.task_id): n
+        for n in db.query(models.Notification).filter(
+            models.Notification.task_id.in_([t.id for t in tasks]),
+            models.Notification.type.in_(DUE_NOTIFICATION_TYPES),
+        )
+    }
+
+    for task in tasks:
         recipient_id = task.assignee_id or user.id
         if user.role == auth.ROLE_DEVELOPER and recipient_id != user.id:
             continue
@@ -323,11 +393,7 @@ def sync_due_notifications(db: Session, user: models.User):
         message = f'Task "{task.title}" needs attention ({ntype.replace("_", " ")})'
 
         # One alert per user+task — do not recreate after mark-as-read
-        existing = db.query(models.Notification).filter(
-            models.Notification.user_id == recipient_id,
-            models.Notification.task_id == task.id,
-            models.Notification.type.in_(DUE_NOTIFICATION_TYPES),
-        ).first()
+        existing = existing_by_key.get((recipient_id, task.id))
 
         if existing:
             old_type = existing.type
@@ -338,13 +404,15 @@ def sync_due_notifications(db: Session, user: models.User):
                 if ntype == "overdue" and old_type != "overdue":
                     existing.is_read = False
         else:
-            db.add(models.Notification(
+            note = models.Notification(
                 user_id=recipient_id,
                 task_id=task.id,
                 type=ntype,
                 title=title,
                 message=message
-            ))
+            )
+            db.add(note)
+            existing_by_key[(recipient_id, task.id)] = note
     db.commit()
 
 # --- Auth Routes ---
@@ -516,10 +584,9 @@ def delete_user(
 # --- Task Routes ---
 def remove_attachment_files(paths):
     """Delete attachment files after their rows are gone (task deletion cascades the rows only)."""
-    uploads_dir = os.path.realpath("uploads")
     for path in paths:
-        real = os.path.realpath(path)
-        if real.startswith(uploads_dir + os.sep) and os.path.isfile(real):
+        real = attachment_disk_path(path)
+        if real and os.path.isfile(real):
             try:
                 os.remove(real)
             except OSError as e:
@@ -559,21 +626,20 @@ def check_refs(db: Session, *, assignee_id=None, project_id=None, sprint_id=None
         if missing:
             raise HTTPException(status_code=400, detail=f"Unknown label id(s): {missing}")
 
-@app.get("/api/tasks", response_model=List[schemas.TaskResponse])
-def get_tasks(
-    status: Optional[str] = None,
-    priority: Optional[str] = None,
-    category: Optional[str] = None,
-    assignee_id: Optional[int] = None,
-    project_id: Optional[int] = None,
-    sprint_id: Optional[int] = None,
-    search: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user)
-):
-    query = db.query(models.Task)
-    query = filter_tasks_for_user(query, current_user)
-    
+# Relationships every task response serializes. Loading them up front turns
+# one-query-per-task-per-relationship into a fixed handful of queries.
+TASK_LIST_LOAD = (
+    selectinload(models.Task.assignee),
+    selectinload(models.Task.project).selectinload(models.Project.lead),
+    selectinload(models.Task.labels),
+    selectinload(models.Task.subtasks),
+)
+
+
+def build_task_query(db: Session, current_user: models.User, *, status=None, priority=None, category=None,
+                     assignee_id=None, project_id=None, sprint_id=None, search=None,
+                     open_only: bool = False, overdue: bool = False):
+    query = filter_tasks_for_user(db.query(models.Task), current_user)
     if status:
         query = query.filter(models.Task.status == status)
     if priority:
@@ -593,8 +659,60 @@ def get_tasks(
         query = query.filter(
             models.Task.title.ilike(pattern, escape="\\") | models.Task.description.ilike(pattern, escape="\\")
         )
-        
-    return query.order_by(models.Task.created_at.desc()).all()
+    if open_only or overdue:
+        query = query.filter(models.Task.status != "Done")
+    if overdue:
+        # due_date is an ISO string, so string order is date order.
+        query = query.filter(models.Task.due_date.isnot(None),
+                             models.Task.due_date < datetime.now().strftime("%Y-%m-%d"))
+    return query
+
+
+@app.get("/api/tasks", response_model=List[schemas.TaskResponse])
+def get_tasks(
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    category: Optional[str] = None,
+    assignee_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    sprint_id: Optional[int] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """Every matching task (the Kanban board and calendar need all of them)."""
+    query = build_task_query(db, current_user, status=status, priority=priority, category=category,
+                             assignee_id=assignee_id, project_id=project_id, sprint_id=sprint_id, search=search)
+    return (query.options(*TASK_LIST_LOAD)
+            .order_by(models.Task.created_at.desc(), models.Task.id.desc()).all())
+
+
+# Declared before /api/tasks/{task_id} so "page" is not parsed as an id.
+@app.get("/api/tasks/page", response_model=schemas.TaskPage)
+def get_tasks_page(
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    category: Optional[str] = None,
+    assignee_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    sprint_id: Optional[int] = None,
+    search: Optional[str] = None,
+    open_only: bool = False,
+    overdue: bool = False,
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """One page of tasks plus the total, for the All Tasks view."""
+    query = build_task_query(db, current_user, status=status, priority=priority, category=category,
+                             assignee_id=assignee_id, project_id=project_id, sprint_id=sprint_id, search=search,
+                             open_only=open_only, overdue=overdue)
+    total = query.order_by(None).count()
+    items = (query.options(*TASK_LIST_LOAD)
+             .order_by(models.Task.created_at.desc(), models.Task.id.desc())
+             .offset(offset).limit(limit).all())
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 @app.get("/api/tasks/{task_id}", response_model=schemas.TaskDetailResponse)
 def get_task(
@@ -602,7 +720,11 @@ def get_task(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    task = (db.query(models.Task)
+            .options(*TASK_LIST_LOAD,
+                     selectinload(models.Task.comments).selectinload(models.Comment.user),
+                     selectinload(models.Task.attachments).selectinload(models.Attachment.user))
+            .filter(models.Task.id == task_id).first())
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     if not auth.developer_can_access_task(current_user, task):
@@ -635,7 +757,7 @@ def create_task(
         sprint_id=task_in.sprint_id
     )
     if task_in.status == "Done":
-        task.completed_at = datetime.utcnow()
+        task.completed_at = models.utcnow()
     
     # Manage labels
     if task_in.label_ids:
@@ -795,11 +917,14 @@ def list_projects(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    query = db.query(models.Project)
+    query = db.query(models.Project).options(selectinload(models.Project.lead))
     if status:
         query = query.filter(models.Project.status == status)
     projects = query.order_by(models.Project.name).all()
-    return [serialize_project(p, db) for p in projects]
+    counts = dict(db.query(models.Task.project_id, func.count(models.Task.id))
+                  .filter(models.Task.project_id.isnot(None))
+                  .group_by(models.Task.project_id).all())
+    return [serialize_project(p, db, counts.get(p.id, 0)) for p in projects]
 
 @app.get("/api/projects/{project_id}", response_model=schemas.ProjectResponse)
 def get_project(
@@ -953,7 +1078,8 @@ def list_sprints(
     if status:
         query = query.filter(models.Sprint.status == status)
     sprints = query.order_by(models.Sprint.start_date.desc()).all()
-    return [serialize_sprint(s, db) for s in sprints]
+    stats = sprint_stats_map(db, [s.id for s in sprints])
+    return [serialize_sprint(s, db, stats.get(s.id, (0, 0))) for s in sprints]
 
 @app.get("/api/sprints/{sprint_id}", response_model=schemas.SprintResponse)
 def get_sprint(
@@ -1263,7 +1389,8 @@ def upload_attachment(
         ext = ""
     # Random stored name: no collisions between same-named uploads, and nothing
     # user-controlled in the path.
-    file_path = os.path.join("uploads", f"{uuid.uuid4().hex}{ext}")
+    stored_name = f"{uuid.uuid4().hex}{ext}"
+    file_path = os.path.join(UPLOAD_DIR, stored_name)
 
     size = 0
     try:
@@ -1283,7 +1410,7 @@ def upload_attachment(
         task_id=task_id,
         user_id=current_user.id,
         filename=display_name,
-        file_path=file_path,
+        file_path=stored_name,
         file_size=size
     )
     db.add(attachment)
@@ -1307,10 +1434,9 @@ def download_attachment(
         if task and not auth.developer_can_access_task(current_user, task):
             raise HTTPException(status_code=403, detail="Access denied to this file.")
 
-    # Only ever serve files that really live in uploads/.
-    uploads_dir = os.path.realpath("uploads")
-    real_path = os.path.realpath(attachment.file_path)
-    if not real_path.startswith(uploads_dir + os.sep) or not os.path.isfile(real_path):
+    # Only ever serve files that really live in UPLOAD_DIR.
+    real_path = attachment_disk_path(attachment.file_path)
+    if not real_path or not os.path.isfile(real_path):
         raise HTTPException(status_code=404, detail="File not found on server")
 
     # Always a download (Content-Disposition: attachment, octet-stream, nosniff),
@@ -1340,9 +1466,10 @@ def delete_attachment(
             raise HTTPException(status_code=403, detail="Access denied to this task.")
         
     # Delete physical file
-    if os.path.exists(attachment.file_path):
+    disk_path = attachment_disk_path(attachment.file_path)
+    if disk_path and os.path.exists(disk_path):
         try:
-            os.remove(attachment.file_path)
+            os.remove(disk_path)
         except Exception as e:
             print(f"Error removing file: {e}")
             
@@ -1365,7 +1492,7 @@ def get_analytics(
     query = filter_tasks_for_user(query, current_user)
     if project_id is not None:
         query = query.filter(models.Task.project_id == project_id)
-    tasks = query.all()
+    tasks = query.options(selectinload(models.Task.assignee)).all()
     users = db.query(models.User).all()
     
     total = len(tasks)
@@ -1458,18 +1585,16 @@ def get_analytics(
     if current_user.role == auth.ROLE_DEVELOPER:
         query = db.query(models.ActivityLog).join(models.Task, isouter=True)
         query = query.filter((models.ActivityLog.task_id.is_(None)) | (models.Task.assignee_id == current_user.id) | (models.Task.assignee_id.is_(None)))
-        logs = query.order_by(models.ActivityLog.timestamp.desc()).limit(15).all()
+        logs = (query.options(selectinload(models.ActivityLog.user), selectinload(models.ActivityLog.task))
+                .order_by(models.ActivityLog.timestamp.desc()).limit(15).all())
     else:
-        logs = db.query(models.ActivityLog).order_by(models.ActivityLog.timestamp.desc()).limit(15).all()
+        logs = (db.query(models.ActivityLog)
+                .options(selectinload(models.ActivityLog.user), selectinload(models.ActivityLog.task))
+                .order_by(models.ActivityLog.timestamp.desc()).limit(15).all())
     recent_logs = []
     for l in logs:
-        # Load task title if available
-        task_title = None
-        if l.task_id:
-            t = db.query(models.Task).filter(models.Task.id == l.task_id).first()
-            if t:
-                task_title = t.title
-                
+        task_title = l.task.title if l.task else None
+
         recent_logs.append({
             "id": l.id,
             "username": l.user.username if l.user else "Deleted user",
@@ -1509,7 +1634,7 @@ def _backup_path(filename: str) -> str:
     # so a crafted name cannot reach files outside backups/.
     if not BACKUP_NAME_RE.fullmatch(filename):
         raise HTTPException(status_code=400, detail="Invalid backup filename")
-    return os.path.join("backups", filename)
+    return os.path.join(BACKUP_DIR, filename)
 
 
 @app.get("/api/backups")
@@ -1517,10 +1642,10 @@ def list_backups(
     admin_user: models.User = Depends(auth.check_permission(["Admin"]))
 ):
     backup_files = []
-    if os.path.exists("backups"):
-        for f in os.listdir("backups"):
+    if os.path.exists(BACKUP_DIR):
+        for f in os.listdir(BACKUP_DIR):
             if f.endswith(".db") or f.endswith(".sql"):
-                path = os.path.join("backups", f)
+                path = os.path.join(BACKUP_DIR, f)
                 size = os.path.getsize(path)
                 created = os.path.getctime(path)
                 backup_files.append({
@@ -1539,7 +1664,7 @@ def create_backup(
 ):
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     backup_filename = f"database_{timestamp}.sql"
-    backup_path = os.path.join("backups", backup_filename)
+    backup_path = os.path.join(BACKUP_DIR, backup_filename)
     
     import subprocess
     from sqlalchemy.engine import make_url
@@ -1953,7 +2078,6 @@ def run_clock_restore(task_id: str, machines: List[str], reason: str):
         _finish_time_test_job(task_id, outcome)
 
 
-@app.on_event("startup")
 def recover_interrupted_time_test():
     """A test was cut short (crash/restart) before its restore: restore now."""
     state = _load_time_test_state()
@@ -2103,9 +2227,68 @@ def run_voice_test(
         raise HTTPException(status_code=502, detail=f"Failed to play voice: {e}")
 
 # --- Serve Static Frontend ---
+@app.get("/service-worker.js")
+def service_worker():
+    # Must be served from the root: a worker's scope is limited to its own path.
+    return FileResponse(os.path.join(STATIC_DIR, "service-worker.js"), media_type="application/javascript")
+
+
+# --- Versioned asset URLs ---------------------------------------------------
+# index.html and app.css are served with every local script/stylesheet reference
+# rewritten to "...?v=<content hash>". A changed file therefore gets a URL no
+# browser, CDN edge or service worker has cached, so deploys take effect on the
+# next page load without anyone bumping a version by hand.
+
+_asset_hash_cache: dict = {}
+_ASSET_REF = re.compile(r"""(["'])(/static/(?:js|css)/[\w.-]+\.(?:js|css)|/service-worker\.js)\1""")
+_CSS_IMPORT = re.compile(r"""@import url\((["'])([\w.-]+\.css)\1\)""")
+
+
+def _file_hash(path: str) -> str:
+    st = os.stat(path)
+    key = (path, st.st_mtime_ns, st.st_size)
+    digest = _asset_hash_cache.get(key)
+    if digest is None:
+        with open(path, "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()[:12]
+        _asset_hash_cache[key] = digest
+    return digest
+
+
+def _css_bundle_hash() -> str:
+    # app.css only @imports the partials, so its version must cover them all.
+    css_dir = os.path.join(STATIC_DIR, "css")
+    parts = sorted(f for f in os.listdir(css_dir) if f.endswith(".css"))
+    return hashlib.sha256("".join(_file_hash(os.path.join(css_dir, f)) for f in parts).encode()).hexdigest()[:12]
+
+
+def _versioned(url: str) -> str:
+    if url == "/static/css/app.css":
+        version = _css_bundle_hash()
+    else:
+        rel = "service-worker.js" if url == "/service-worker.js" else url[len("/static/"):]
+        path = os.path.join(STATIC_DIR, rel)
+        if not os.path.isfile(path):
+            return url
+        version = _file_hash(path)
+    return f"{url}?v={version}"
+
+
+@app.get("/static/css/app.css")
+def app_css():
+    with open(os.path.join(STATIC_DIR, "css", "app.css"), encoding="utf-8") as fh:
+        css = fh.read()
+    css = _CSS_IMPORT.sub(lambda m: f"@import url({m.group(1)}{_versioned('/static/css/' + m.group(2))}{m.group(1)})", css)
+    return Response(css, media_type="text/css")
+
+
 def _spa_index():
-    if os.path.exists("static/index.html"):
-        return FileResponse("static/index.html")
+    index_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_path):
+        with open(index_path, encoding="utf-8") as fh:
+            html = fh.read()
+        html = _ASSET_REF.sub(lambda m: f"{m.group(1)}{_versioned(m.group(2))}{m.group(1)}", html)
+        return HTMLResponse(html)
     return {"message": "Task Management Server is running! Place your frontend in static/index.html to view."}
 
 @app.get("/")
@@ -2153,7 +2336,7 @@ def spa_test_time():
     return _spa_index()
 
 # Mount static files (PWA support, manifest, service worker)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 # uploads/ is deliberately NOT mounted: attachments are served only through
 # the authenticated /api/attachments/{id}, which applies the role checks.
 
@@ -2167,8 +2350,10 @@ def spa_fallback(full_path: str):
 if __name__ == "__main__":
     import uvicorn
 
+    # Pass the app object: the "server:app" string made uvicorn import this
+    # module a second time, running create_all + the upgrade twice per start.
     uvicorn.run(
-        "server:app",
+        app,
         host="127.0.0.1",
         port=5001,
         reload=False,

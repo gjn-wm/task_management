@@ -7,14 +7,22 @@ Task_itms is an internal task/sprint management app: a **FastAPI** backend (READ
 ## Commands
 
 ```bash
-pip install -r requirements.txt        # plus `pip install pyzk` — server.py imports bio/zk_tool.py
+pip install -r requirements.txt        # pinned; plus `pip install pyzk` for the ZK time test
+pip install -r requirements-dev.txt    # pytest + httpx2 (TestClient)
 python server.py                       # uvicorn on 127.0.0.1:5001, no reload
 uvicorn server:app --host 0.0.0.0 --port 5001 --reload   # dev alternative
-python upgrade_db.py                   # idempotent schema upgrades (also runs on every server import)
+python upgrade_db.py                   # idempotent schema upgrades (also runs when server.py is imported)
 python migrate.py                      # one-off: copy legacy SQLite database.db -> PostgreSQL
+
+# tests: TEST_DATABASE_URL is required and its database name must end in "_test"
+TEST_DATABASE_URL=postgresql://admin:<pw>@localhost:5432/gjn_db_test python -m pytest -q
+python -m pytest tests/test_tasks.py::test_name -q     # a single test
+python scripts/check_frontend.py       # node --check on every JS file and the inline script
 ```
 
-There is no test suite, linter or build step. Frontend assets are served as-is from `static/`. To verify a change, run the server and exercise it in the browser or with curl. Never test against `gjn_db`. Use a throwaway database in the same container (`docker exec postgres18 psql -U admin -d postgres -c "CREATE DATABASE gjn_db_test"`) and run a copy of the app with `DATABASE_URL` pointing at it. Only on an **empty** users table does startup create `admin`, with `INITIAL_ADMIN_PASSWORD` or a random password printed once to the log. It also seeds default labels.
+**Tests (`tests/`)** run the real app through FastAPI's `TestClient` against a real PostgreSQL database. `conftest.py` creates the `_test` database if it is missing, truncates all tables before each test, points `UPLOAD_DIR`/`BACKUP_DIR` at temp dirs and lowers the bcrypt cost. Drop the test database afterwards (`DROP DATABASE gjn_db_test`). `test_query_counts.py` fails if an endpoint's SQL statement count grows with the number of rows; when it fails, eager-load the relationship instead of loosening the test. The time-test tests replace `rs9n_call` with a fake, so no device is contacted. CI (`.github/workflows/ci.yml`) runs compileall, `check_frontend.py` and pytest against a `postgres:16` service on pushes to `main` and on PRs. There is no linter or build step: frontend assets are served from `static/`.
+
+For manual checks, never use `gjn_db`. Use a throwaway database in the same container (`docker exec postgres18 psql -U admin -d postgres -c "CREATE DATABASE gjn_db_test"`) and run a copy of the app with `DATABASE_URL` pointing at it. Only on an **empty** users table does startup create `admin`, with `INITIAL_ADMIN_PASSWORD` or a random password printed once to the log. It also seeds default labels.
 
 `run_server.bat` is the production launcher on a Windows host (it runs at boot from a scheduled task and logs to `logs/server.log`). It uses hardcoded Windows paths, so don't "fix" it for Linux.
 
@@ -25,7 +33,14 @@ There is no test suite, linter or build step. Frontend assets are served as-is f
 
 ## Architecture
 
-**Backend: almost everything is in `server.py`.** All routes live there, along with serializer helpers (`serialize_project`, `serialize_sprint`, `serialize_user`), `log_activity`, and `sync_due_notifications`. The due-date notifications are generated lazily when notifications are fetched; there is no scheduler. Import-time side effects in `server.py`: it creates `uploads/` and `backups/`, runs `Base.metadata.create_all`, and runs `upgrade_db.run_upgrade()`.
+**Backend: almost everything is in `server.py`.** All routes live there, along with serializer helpers (`serialize_project`, `serialize_sprint`, `serialize_user`), `log_activity`, and `sync_due_notifications`. The due-date notifications are generated lazily when notifications are fetched; there is no scheduler. Import-time side effects in `server.py`: it creates `uploads/` and `backups/`, runs `Base.metadata.create_all`, and runs `upgrade_db.run_upgrade()`. Startup work (`create_initial_admin`, `recover_interrupted_time_test`) runs in the `lifespan` handler, not `@app.on_event`. `python server.py` passes the `app` object to uvicorn (not the `"server:app"` string), so the module and the upgrade run once per start. `STATIC_DIR`, `UPLOAD_DIR` and `BACKUP_DIR` are absolute paths; the last two can be overridden by env vars of the same name.
+
+**Query performance:** never let a list endpoint lazy-load per row.
+- Task lists go through `build_task_query()`, which applies `TASK_LIST_LOAD` (`selectinload` for assignee, labels, subtasks, project, sprint). `get_task` also eager-loads comments and attachments with their users. Any relationship a serializer touches must be in the load set.
+- Project and sprint task counts come from one aggregate query (`sprint_stats_map`; a grouped count for projects) passed into `serialize_project`/`serialize_sprint`, not from `len(obj.tasks)`.
+- `GET /api/tasks` returns the full (role-filtered) list for Kanban and calendar. The All Tasks table uses `GET /api/tasks/page` (`limit` 1–200, `offset`, `open_only`, `overdue`; returns `{items, total, limit, offset}`). It is declared before `/api/tasks/{task_id}`, so keep it there.
+- `sync_due_notifications` is throttled per user (`DUE_SYNC_INTERVAL_SEC`), filters `due_date <= tomorrow` in SQL, and loads existing alerts in one query.
+- Indexes: `models.INDEXED_COLUMNS` lists the `ix_<table>_<column>` indexes, and `upgrade_db.py` creates them with `CREATE INDEX IF NOT EXISTS`. Add new filter or FK columns there.
 
 **Schema changes:** `create_all` only creates missing tables. It never alters existing ones. When you add a column to `models.py`, also add a guarded `ALTER TABLE` in `upgrade_db.py` (it uses `column_exists` / `table_exists` checks and raw PostgreSQL DDL). Otherwise existing databases break.
 
@@ -39,7 +54,7 @@ There is no test suite, linter or build step. Frontend assets are served as-is f
 
 **Task status:** the columns are fixed: Backlog → Todo → In Progress → Review → Testing → Done. Always change status through `apply_task_status()`, which sets and clears `completed_at`. Analytics, burndown and velocity depend on `completed_at`.
 
-**Dates:** `Task.due_date`, `Sprint.start_date` and `Sprint.end_date` are **strings** (`YYYY-MM-DD`), not Date columns. Timestamps (`created_at`, `completed_at`, `ActivityLog.timestamp`, …) are naive UTC (`datetime.utcnow`) and serialize **without** a timezone suffix. The frontend must parse them with `parseServerDate()`, which appends the `Z`; without it, IST users see times 5½ h off. For a local `YYYY-MM-DD` use `localDateStr()`, never `toISOString()`, which gives the UTC date. On the server, convert a timestamp with `utc_to_local_date()` before comparing it with local "today" or "this week" values.
+**Dates:** `Task.due_date`, `Sprint.start_date` and `Sprint.end_date` are **strings** (`YYYY-MM-DD`), not Date columns. Timestamps (`created_at`, `completed_at`, `ActivityLog.timestamp`, …) are naive UTC (`models.utcnow()`; don't use the deprecated `datetime.utcnow`) and serialize **without** a timezone suffix. The frontend must parse them with `parseServerDate()`, which appends the `Z`; without it, IST users see times 5½ h off. For a local `YYYY-MM-DD` use `localDateStr()`, never `toISOString()`, which gives the UTC date. On the server, convert a timestamp with `utc_to_local_date()` before comparing it with local "today" or "this week" values.
 
 **Update semantics:** the `PUT` handlers for tasks, projects and sprints use `apply_updates()` (`model_dump(exclude_unset=True)`):
 - a field that is omitted is left unchanged
@@ -73,7 +88,7 @@ On the Linux Mint host the app runs as the systemd user service `task-itms.servi
   - `handleSaveTask`, `loadTasks` and `loadAllTasks` are fully replaced in `upgrade.js`.
   - `renderKanbanBoard` and `switchView` are wrapped in more than one layer.
   - `refreshDataSilently` (every 60 s, and when the tab becomes visible) calls the real loaders, so filters survive: `loadTasks`, `loadAllTasks(1, {silent: true})`, `loadCalendar`, and the panel loaders. It skips hidden tabs and in-progress drags.
-  - `loadAllTasks(page, {quick, silent})`: `quick` is `'pending'` or `'overdue'` (from the dashboard KPI cards), and `silent` keeps the page and selection.
+  - All Tasks is **server-paginated**: `loadAllTasks(page, {quick, silent, paging})` fetches one page from `/api/tasks/page`, and `allTasksTotal` holds the total. `quick` is `'pending'` or `'overdue'` (from the dashboard KPI cards) and maps to `open_only`/`overdue`. `silent` keeps the page and selection; paging keeps the selection; a filter change clears it.
   - The calendar has its own `calendarTasks`, loaded by `loadCalendar()`. It does not share the Kanban list.
 - **Escaping is mandatory.** Rendering builds `innerHTML` from template strings, so every server-supplied value must be wrapped with the helpers at the top of the inline script:
   - `esc()` for text and attribute values.
@@ -83,10 +98,13 @@ On the Linux Mint host the app runs as the systemd user service `task-itms.servi
 
   Use `textContent` wherever no HTML is needed.
 - CSS goes through `css/app.css`, which `@import`s the split files. Don't add inline `<style>` to `index.html`. Theme colours are `--success`, `--warning`, `--error` and `--accent-color` (from `tokens.css`). The `--success-color` / `--danger-color` / `--primary-color` names used in older code are undefined.
-- CDN deps: Chart.js, marked and lucide. All are unpinned (`@latest`) and have no SRI.
+- CDN deps: Chart.js, marked, lucide and DOMPurify, pinned to exact versions with SRI `integrity` hashes. To upgrade one, change the URL in `index.html` **and** `CDN_ASSETS` in `service-worker.js`, and recompute the hash.
 - **Adding a new client-side route:** add it to `VIEW_PATHS` in `index.html`, and also add a matching `@app.get` route in `server.py` that returns `_spa_index()`. A catch-all fallback exists, but the explicit routes are the convention.
-- `service-worker.js` serves every `/static/*` request **cache-first, permanently**. Page navigations and `/api/*` always go to the network. **Bump `CACHE_NAME` whenever any file under `static/` changes**, or clients keep running old JS/CSS against new HTML.
+- **Caching and deploys.** A changed file reaches users on their next page load; nothing needs bumping by hand.
+  - `_spa_index()` serves `index.html` with every local script/stylesheet URL and the service-worker registration rewritten to `...?v=<content hash>`. `app_css()` does the same for the `@import`s in `app.css`, whose own version covers all the partials. A changed file therefore has a URL that no browser, Cloudflare edge or service worker has cached. New local `<script>`/`<link>` tags must use absolute `/static/js/…` or `/static/css/…` paths so the rewrite picks them up.
+  - `security_middleware` sends `Cache-Control: no-cache` for pages and static files, plus `CDN-Cache-Control: no-store` for Cloudflare, which otherwise edge-caches `.js`/`.css` for hours whatever the origin says.
+  - `service-worker.js` is served from `/service-worker.js` with scope `/` (the old `/static/`-scoped worker never controlled any page and is unregistered by `index.html`). It is **network-first** for navigations and `/static/*` (the cache is only an offline fallback, and older `?v=` copies are pruned), **cache-first** for the pinned CDN files, and leaves `/api/*` and `/uploads/*` alone. Bump `CACHE_NAME` only when you change the worker's caching scheme.
 
-**Files and backups:** attachments are saved to `uploads/` under random `uuid4` names, limited by `MAX_UPLOAD_MB` (default 25). The original filename is kept only in the DB. Files are served **only** by `GET /api/attachments/{id}`, which checks auth and roles and always sends a download with octet-stream. `uploads/` is deliberately not mounted. Backup filenames must match `BACKUP_NAME_RE`. `POST /api/backups` runs `pg_dump` via `docker exec postgres18`, and the Admin backup endpoints read and write `backups/`. Both directories are gitignored.
+**Files and backups:** attachments are saved to `UPLOAD_DIR` (default `uploads/`) under random `uuid4` names (the DB stores just that name; old `uploads/<name>` values still resolve through `attachment_disk_path()`), limited by `MAX_UPLOAD_MB` (default 25). The original filename is kept only in the DB. Files are served **only** by `GET /api/attachments/{id}`, which checks auth and roles and always sends a download with octet-stream. `uploads/` is deliberately not mounted. Backup filenames must match `BACKUP_NAME_RE`. `POST /api/backups` runs `pg_dump` via `docker exec postgres18`, and the Admin backup endpoints read and write `backups/`. Both directories are gitignored.
 
-`scripts/` holds one-off refactoring helpers from the CSS split. They are not part of the runtime.
+`scripts/` holds one-off refactoring helpers from the CSS split, plus `check_frontend.py` (used by CI). None of it is part of the runtime.

@@ -1,8 +1,13 @@
-fastapi>=0.110.0
-uvicorn>=0.28.0
-sqlalchemy>=2.0.0
-pydantic>=2.6.0
-python-multipart>=0.0.9
-pyjwt>=2.8.0
-bcrypt>=4.0.1
-psycopg2-binary>=2.9.0
+# Pinned to the versions running in production. Upgrade deliberately, then run
+# the test suite (see requirements-dev.txt).
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn==0.52.4
+sqlalchemy==2.0.52
+pydantic==2.13.5
+python-multipart==0.0.32
+pyjwt==2.13.0
+bcrypt==5.0.0
+psycopg2-binary==2.9.12
+# Only needed for the ZKTeco time test (bio/zk_tool.py imports it lazily).
+# pyzk
