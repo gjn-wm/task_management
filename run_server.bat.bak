@@ -1,0 +1,4 @@
+@echo off
+cd /d "C:\Users\warr\Desktop\dev_gjn\Task_itms"
+
+"C:\Users\warr\Desktop\dev_gjn\Task_itms\.venv\Scripts\python.exe" "C:\Users\warr\Desktop\dev_gjn\Task_itms\server.py"
